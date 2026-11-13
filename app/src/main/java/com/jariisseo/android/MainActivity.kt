@@ -7,7 +7,11 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.Paint
 import android.opengl.GLSurfaceView
+import android.os.Build
 import android.os.Bundle
+import android.os.VibrationEffect
+import android.os.Vibrator
+import android.view.KeyEvent
 import android.view.MotionEvent
 import android.widget.Toast
 import androidx.activity.ComponentActivity
@@ -15,7 +19,9 @@ import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -27,6 +33,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.material3.Button
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
@@ -58,6 +65,7 @@ class MainActivity : ComponentActivity() {
     // ★ 글자 하나(statusText) 대신 화면 상태 전체를 들고 있음
     private var uiState by mutableStateOf(ArUiState())
     private var modelInfo by mutableStateOf("모델 로딩 중...")   // ★ 8교시
+    private var wallMode by mutableStateOf(false)              // #38: 벽 대기 버튼 줄 표시 (꺼도 기록·외곽선은 유지)
 
     private var session: Session? = null          // ARCore 엔진. 처음엔 없음(null)
     private var installRequested = false          // AR 서비스 설치 화면을 이미 띄웠는지
@@ -83,7 +91,11 @@ class MainActivity : ComponentActivity() {
             null
         }
         // GL 스레드에서 온 상태를 UI 스레드로 넘겨서 화면 갱신
-        renderer = ArRenderer(detector) { state -> runOnUiThread { uiState = state } }
+        renderer = ArRenderer(
+            detector,
+            onState = { state -> runOnUiThread { uiState = state } },
+            onWallRecord = { ok -> runOnUiThread { vibrate(ok) } },   // #38: 화면이 벽에 붙어 있어 진동으로 알림
+        )
 
         glView = GLSurfaceView(this).apply {
             preserveEGLContextOnPause = true
@@ -169,39 +181,58 @@ class MainActivity : ComponentActivity() {
                 Text(state.detectInfo, color = Color.Yellow)
             }
 
-            // ★ 3층 아래쪽: [왼쪽] 거리 + 안내 + 가구 수 + 버튼 / [오른쪽] 9교시 탑뷰 미니맵
-            Row(
+            // ★ 3층 아래쪽: [#38 벽 대기 버튼] / [왼쪽] 거리 + 안내 + 가구 수 · [오른쪽] 9교시 탑뷰 미니맵 / [버튼]
+            Column(
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
                     .fillMaxWidth()
                     .background(Color.Black.copy(alpha = 0.6f))
                     .padding(12.dp),
-                verticalAlignment = Alignment.CenterVertically,
             ) {
-                Column(Modifier.weight(1f)) {
+                if (wallMode) {
                     Text(
-                        text = state.lastDistanceM?.let { "두 점 거리: %.2f m".format(it) }
-                            ?: "점을 2개 찍으면 거리가 나와요",
-                        color = Color.White,
-                        fontSize = 18.sp,
+                        if (state.outlineClosed) "외곽선 완료"
+                        else "벽을 돌아가며 순서대로: 화면을 벽에 평평하게 대고 볼륨 버튼 (진동 1번 = 기록, 2번 = 실패)",
+                        color = Color.White, fontSize = 13.sp,
                     )
-                    Text(state.message, color = Color.LightGray, fontSize = 12.sp)
-                    val confirmed = state.mapItems.filter { it.confirmed }
-                    Text(
-                        "확정: 테이블 ${confirmed.count { it.label == "테이블" }} · " +
-                            "의자 ${confirmed.count { it.label == "의자" }} · " +
-                            "소파 ${confirmed.count { it.label == "소파" }}",
-                        color = Color.White,
-                    )
-                    Spacer(Modifier.height(6.dp))
-                    Row {
-                        Button(onClick = { renderer.clear() }) { Text("모두 지우기") }
-                        Spacer(Modifier.width(8.dp))
-                        Button(onClick = { exportLayout() }) { Text("JSON 내보내기") }
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Button(onClick = { renderer.outlineOp(OutlineOp.RECORD) }, modifier = Modifier.weight(1f)) {
+                            Text("기록")
+                        }
+                        TextButton(onClick = { renderer.outlineOp(OutlineOp.UNDO) }) { Text("되돌리기") }
+                        TextButton(onClick = { renderer.outlineOp(OutlineOp.RESET) }) { Text("다시") }
+                        TextButton(onClick = { renderer.outlineOp(OutlineOp.CLOSE) }) { Text("완료") }
                     }
                 }
-                Spacer(Modifier.width(8.dp))
-                MiniMap(state, Modifier.size(150.dp))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text(
+                            text = state.lastDistanceM?.let { "두 점 거리: %.2f m".format(it) }
+                                ?: "점을 2개 찍으면 거리가 나와요",
+                            color = Color.White,
+                            fontSize = 18.sp,
+                        )
+                        Text(state.message, color = Color.LightGray, fontSize = 12.sp)
+                        val confirmed = state.mapItems.filter { it.confirmed }
+                        Text(
+                            "확정: 테이블 ${confirmed.count { it.label == "테이블" }} · " +
+                                "의자 ${confirmed.count { it.label == "의자" }} · " +
+                                "소파 ${confirmed.count { it.label == "소파" }}",
+                            color = Color.White,
+                        )
+                    }
+                    Spacer(Modifier.width(8.dp))
+                    MiniMap(state, Modifier.size(150.dp))
+                }
+                Spacer(Modifier.height(6.dp))
+                val small = PaddingValues(horizontal = 10.dp)
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Button(onClick = { renderer.clear() }, contentPadding = small) { Text("모두 지우기", fontSize = 13.sp) }
+                    Button(onClick = { wallMode = !wallMode }, contentPadding = small) {
+                        Text(if (wallMode) "벽 대기 끝" else "벽 대기", fontSize = 13.sp)
+                    }
+                    Button(onClick = { exportLayout() }, contentPadding = small) { Text("JSON 내보내기", fontSize = 13.sp) }
+                }
             }
         }
     }
@@ -266,6 +297,25 @@ class MainActivity : ComponentActivity() {
         textSize = 40f
         isFakeBoldText = true
         setShadowLayer(4f, 0f, 0f, android.graphics.Color.BLACK)
+    }
+
+    /** #38: 벽 대기 중에는 볼륨 버튼 = [기록] (화면을 벽에 대고 있어 화면 버튼을 못 누름) */
+    override fun onKeyDown(keyCode: Int, event: KeyEvent): Boolean {
+        val volume = keyCode == KeyEvent.KEYCODE_VOLUME_DOWN || keyCode == KeyEvent.KEYCODE_VOLUME_UP
+        if (!wallMode || !volume) return super.onKeyDown(keyCode, event)
+        if (event.repeatCount == 0) renderer.outlineOp(OutlineOp.RECORD)   // 길게 눌러도 1번만
+        return true                                                         // 음량은 바꾸지 않음
+    }
+
+    /** #38: 기록 성공 = 길게 1번, 실패 = 짧게 2번 */
+    private fun vibrate(ok: Boolean) {
+        val vibrator = getSystemService(Vibrator::class.java) ?: return
+        val pattern = if (ok) longArrayOf(0, 250) else longArrayOf(0, 100, 120, 100)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            vibrator.vibrate(VibrationEffect.createWaveform(pattern, -1))
+        } else {
+            @Suppress("DEPRECATION") vibrator.vibrate(pattern, -1)
+        }
     }
 
     /**
