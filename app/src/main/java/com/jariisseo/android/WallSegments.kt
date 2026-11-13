@@ -132,6 +132,7 @@ class WallSegments(private val minSeen: Int = MIN_SEEN) {
         const val MIN_LENGTH_M = 1.0f    // 출력할 최소 벽 길이
         const val LAYER_M = 1.0f         // 이 안에서 나란히 겹친 벽은 바깥쪽 하나만 (창틀·커튼·벽면)
         const val JOIN_M = 1.0f          // 모서리(두 벽 직선의 교점)가 끝점에서 이 안이면 맞물림
+        const val CONNECTED_M = 0.05f    // 끝점이 교점에서 이 안이면 이미 붙어 있는 것으로 봄
 
         /** 짝 조건으로 이어진 선분 묶음 (union-find) */
         private fun groups(lines: List<WallLine>, linked: (WallLine, WallLine) -> Boolean): List<List<WallLine>> {
@@ -160,7 +161,8 @@ class WallSegments(private val minSeen: Int = MIN_SEEN) {
 
         /** 나란히(LAYER_M 안) 겹친 벽 중 방 중심에서 가장 먼 것만 남김 */
         private fun outermost(walls: List<WallLine>, center: Pair<Float, Float>?): List<WallLine> {
-            val ordered = if (center != null) walls.sortedByDescending { dist(mid(it), center) } else walls.sortedByDescending { length(it) }
+            // 중심에서 벽 직선까지 수직 거리로 순위 (중간점 거리는 벽 방향 위치까지 섞여 안쪽 조각이 앞설 수 있음)
+            val ordered = if (center != null) walls.sortedByDescending { offset(it, center) } else walls.sortedByDescending { length(it) }
             val kept = mutableListOf<WallLine>()
             for (w in ordered) {
                 val hidden = kept.any { k -> parallel(k, w) && offset(k, mid(w)) <= LAYER_M && gapAlong(k, w) < 0f }
@@ -192,11 +194,22 @@ class WallSegments(private val minSeen: Int = MIN_SEEN) {
                 return if (t in 0f..1f) null to 0f else null   // 가운데(T자)면 이 벽은 그대로
             }
 
+            // 교점이 이 벽의 끝이 아닌 안쪽에 있는지
+            fun interior(k: Int, p: Pair<Float, Float>): Boolean {
+                val (a, b) = lines[k]
+                val len = dist(a, b)
+                val t = ((p.first - a.first) * (b.first - a.first) + (p.second - a.second) * (b.second - a.second)) / (len * len)
+                return t > CONNECTED_M / len && t < 1f - CONNECTED_M / len
+            }
+
             val joins = mutableListOf<Join>()
             for (i in lines.indices) for (j in i + 1 until lines.size) {
                 val p = intersect(lines[i], lines[j]) ?: continue
-                val ei = endFor(i, p) ?: continue
-                val ej = endFor(j, p) ?: continue
+                var ei = endFor(i, p) ?: continue
+                var ej = endFor(j, p) ?: continue
+                // 한쪽 벽 끝이 이미 다른 벽 안쪽에 붙어 있으면(T자) 관통하는 벽은 자르지 않음
+                if (ei.first != null && ei.second < CONNECTED_M && interior(j, p)) ej = null to 0f
+                if (ej.first != null && ej.second < CONNECTED_M && interior(i, p)) ei = null to 0f
                 if (ei.first == null && ej.first == null) continue   // 둘 다 가운데 = 이미 교차
                 joins += Join(i, j, p, ei.first, ej.first, ei.second + ej.second)
             }

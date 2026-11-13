@@ -188,6 +188,19 @@ class WallSegmentsTest {
     }
 
     @Test
+    fun `이미 붙어 있는 T자는 관통하는 벽 끝 근처라도 자르지 않는다`() {
+        val input = listOf(line(0f, 0f, 2f, 0f), line(0.5f, 0f, 0.5f, 3f))
+        assertEquals(input, WallSegments.joinCorners(input))
+    }
+
+    @Test
+    fun `긴 바깥 벽이 안쪽 짧은 조각에 가려지지 않는다`() {
+        val floor = listOf(0f to 0f, 10f to 0f, 10f to 6f, 0f to 6f)
+        val result = walls(line(0f, 0f, 10f, 0f), line(0f, 0.4f, 2f, 0.4f), center = 5f to 3f, floor = floor)
+        assertEquals(listOf(line(0f, 0f, 10f, 0f)), result)
+    }
+
+    @Test
     fun `교점이 멀면(문·열린 공간) 잇지 않는다`() {
         val input = listOf(line(0f, 0f, 3f, 0f), line(5f, 1f, 5f, 4f))
         assertEquals(input, WallSegments.joinCorners(input))
