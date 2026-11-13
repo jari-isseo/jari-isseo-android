@@ -3,6 +3,7 @@ package com.jariisseo.android
 import android.opengl.GLES20
 import android.opengl.GLSurfaceView
 import android.opengl.Matrix
+import android.util.Log
 import android.view.Surface
 import com.google.ar.core.Anchor
 import com.google.ar.core.Camera
@@ -224,7 +225,7 @@ class ArRenderer(
 
     /**
      * 9교시: 새 인식 결과가 있으면, 각 박스의 "아래쪽 가운데"(다리가 바닥에 닿는 곳)를
-     * 바닥에 Hit Test → 실제 위치(m) → 기존 가구와 가까우면 병합, 아니면 새로 추가
+     * 바닥에 Hit Test → 카메라 반대쪽으로 반 깊이만큼 밀어 중심 추정 → 기존 가구와 가까우면 병합, 아니면 새로 추가
      */
     private fun projectDetections(frame: Frame) {
         val generation = detectionGeneration
@@ -243,22 +244,44 @@ class ArRenderer(
                 }
                 .minByOrNull { it.hitPose.ty() }   // 수평면이 여러 개면(테이블 윗면 등) 가장 낮은 것 = 바닥
                 ?: continue                        // 바닥을 아직 못 찾은 곳
-            addOrMerge(d.label, hit)
+            val center = estimateCenter(frame.camera.pose, hit.hitPose, HALF_DEPTH_M.getValue(d.label))
+            addOrMerge(d.label, hit.trackable as Plane, center, hit.hitPose)
         }
     }
 
+    /**
+     * 박스 아래 접점은 카메라에 가장 가까운 다리 → 어느 방향에서 보느냐에 따라 위치가 달라짐.
+     * 카메라 → 접점 수평 방향으로 반 깊이만큼 더 밀어 가구 중심을 추정 (높이는 바닥 그대로)
+     */
+    private fun estimateCenter(camera: Pose, contact: Pose, halfDepth: Float): Pose {
+        val dx = contact.tx() - camera.tx()
+        val dz = contact.tz() - camera.tz()
+        val len = sqrt(dx * dx + dz * dz)
+        if (len < 0.01f) return contact   // 바로 위에서 내려다본 경우: 방향을 알 수 없음
+        return Pose.makeTranslation(
+            contact.tx() + dx / len * halfDepth,
+            contact.ty(),
+            contact.tz() + dz / len * halfDepth,
+        )
+    }
+
     /** 같은 종류가 병합 거리 안에 있으면 "같은 물체"로 보고 관측 횟수만 +1 */
-    private fun addOrMerge(label: String, hit: com.google.ar.core.HitResult) {
-        val pose = hit.hitPose
+    private fun addOrMerge(label: String, plane: Plane, pose: Pose, contact: Pose) {
         val nearest = mapObjects
             .filter { it.label == label && it.anchor.trackingState == TrackingState.TRACKING }
             .minByOrNull { floorDistance(it.anchor.pose, pose) }
 
-        if (nearest != null && floorDistance(nearest.anchor.pose, pose) < MERGE_DISTANCE_M.getValue(label)) {
-            nearest.count++
+        val merged = nearest != null && floorDistance(nearest.anchor.pose, pose) < MERGE_DISTANCE_M.getValue(label)
+        if (merged) {
+            nearest!!.count++
         } else {
-            mapObjects += MapObject(label, hit.createAnchor())
+            mapObjects += MapObject(label, plane.createAnchor(pose))
         }
+        // #2: 같은 가구를 앞·뒤에서 봤을 때 center 차이 비교용 (adb logcat -s ArRenderer)
+        Log.d(TAG, "%s contact=(%.2f, %.2f) center=(%.2f, %.2f) → %s".format(
+            label, contact.tx(), contact.tz(), pose.tx(), pose.tz(),
+            if (merged) "병합 #${mapObjects.indexOf(nearest)} (${nearest!!.count}회)" else "새로 추가 #${mapObjects.lastIndex}",
+        ))
     }
 
     /** 바닥 평면 위 거리 (높이 y는 무시하고 x, z만) */
@@ -365,5 +388,8 @@ class ArRenderer(
         const val CONFIRM_COUNT = 3         // 이만큼 관측돼야 "확정" (가끔 나오는 오인식 걸러내기)
         // 종류별 병합 거리: 의자는 서로 붙어 있어서 작게, 테이블·소파는 크게
         val MERGE_DISTANCE_M = mapOf("의자" to 0.35f, "테이블" to 0.6f, "소파" to 0.8f)
+        // 박스 아래 접점(카메라 쪽 끝) → 가구 중심까지 거리. 카메라 반대 방향으로 이만큼 밀어 중심 추정
+        val HALF_DEPTH_M = mapOf("의자" to 0.2f, "테이블" to 0.35f, "소파" to 0.4f)
+        private const val TAG = "ArRenderer"
     }
 }
