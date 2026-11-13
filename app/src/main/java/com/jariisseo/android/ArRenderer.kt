@@ -97,9 +97,33 @@ class ArRenderer(
     private val cornerOut = FloatArray(4)
 
     // ── 9교시: 바닥 투영 + 중복 병합 ──
-    /** 배치도의 가구 1개. 위치는 Anchor로 들고 있어서 ARCore가 지도를 보정하면 같이 따라감 */
+    /**
+     * 배치도의 가구 1개. 위치는 Anchor로 들고 있어서 ARCore가 지도를 보정하면 같이 따라감.
+     * 관측마다 앵커 기준 오프셋(dx, dz)을 누적 → 위치 = 앵커 + 오프셋 평균 (첫 관측은 오프셋 0)
+     */
     private class MapObject(val label: String, val anchor: Anchor) {
         var count = 1   // 몇 번 관측됐는지
+        private var sumDx = 0f
+        private var sumDz = 0f
+
+        fun x() = anchor.pose.tx() + sumDx / count
+        fun z() = anchor.pose.tz() + sumDz / count
+
+        fun addObservation(pose: Pose) {
+            sumDx += pose.tx() - anchor.pose.tx()
+            sumDz += pose.tz() - anchor.pose.tz()
+            count++
+        }
+
+        /** 다른 가구를 흡수: 두 평균을 관측 수로 가중 평균 (이 앵커는 그대로) */
+        fun absorb(other: MapObject) {
+            val total = count + other.count
+            val x = (x() * count + other.x() * other.count) / total
+            val z = (z() * count + other.z() * other.count) / total
+            count = total
+            sumDx = (x - anchor.pose.tx()) * total
+            sumDz = (z - anchor.pose.tz()) * total
+        }
     }
     private val mapObjects = mutableListOf<MapObject>()   // GL 스레드에서만 다룸
     private var processedGeneration = 0                   // 이미 투영한 인식 결과 번호
@@ -265,29 +289,54 @@ class ArRenderer(
         )
     }
 
-    /** 같은 종류가 병합 거리 안에 있으면 "같은 물체"로 보고 관측 횟수만 +1 */
+    /** 같은 종류가 병합 거리 안에 있으면 "같은 물체"로 보고 관측 위치를 평균에 누적 */
     private fun addOrMerge(label: String, plane: Plane, pose: Pose, contact: Pose) {
         val nearest = mapObjects
             .filter { it.label == label && it.anchor.trackingState == TrackingState.TRACKING }
-            .minByOrNull { floorDistance(it.anchor.pose, pose) }
+            .minByOrNull { floorDistance(it, pose) }
 
-        val merged = nearest != null && floorDistance(nearest.anchor.pose, pose) < MERGE_DISTANCE_M.getValue(label)
+        val merged = nearest != null && floorDistance(nearest, pose) < MERGE_DISTANCE_M.getValue(label)
         if (merged) {
-            nearest!!.count++
+            nearest!!.addObservation(pose)
         } else {
             mapObjects += MapObject(label, plane.createAnchor(pose))
         }
-        // #2: 같은 가구를 앞·뒤에서 봤을 때 center 차이 비교용 (adb logcat -s ArRenderer)
-        Log.d(TAG, "%s contact=(%.2f, %.2f) center=(%.2f, %.2f) → %s".format(
-            label, contact.tx(), contact.tz(), pose.tx(), pose.tz(),
-            if (merged) "병합 #${mapObjects.indexOf(nearest)} (${nearest!!.count}회)" else "새로 추가 #${mapObjects.lastIndex}",
+        // #2·#3: 관측 위치(center)와 누적 평균(avg) 비교용 (adb logcat -s ArRenderer)
+        val obj = if (merged) nearest!! else mapObjects.last()
+        Log.d(TAG, "%s contact=(%.2f, %.2f) center=(%.2f, %.2f) avg=(%.2f, %.2f) → %s".format(
+            label, contact.tx(), contact.tz(), pose.tx(), pose.tz(), obj.x(), obj.z(),
+            if (merged) "병합 #${mapObjects.indexOf(obj)} (${obj.count}회)" else "새로 추가 #${mapObjects.lastIndex}",
+        ))
+        if (merged) remerge(obj)
+    }
+
+    /**
+     * 평균이 움직여 같은 종류의 다른 가구와 병합 거리 안에 들어오면 하나로 합침.
+     * 첫 관측이 튀어 따로 생긴 중복을 정리 (관측 수가 많은 쪽이 남고, 나머지 앵커는 해제)
+     */
+    private fun remerge(obj: MapObject) {
+        val other = mapObjects
+            .filter { it !== obj && it.label == obj.label && it.anchor.trackingState == TrackingState.TRACKING }
+            .minByOrNull { floorDistance(it, obj.x(), obj.z()) }
+            ?: return
+        if (floorDistance(other, obj.x(), obj.z()) >= MERGE_DISTANCE_M.getValue(obj.label)) return
+
+        val (keep, drop) = if (obj.count >= other.count) obj to other else other to obj
+        val dropIndex = mapObjects.indexOf(drop)
+        keep.absorb(drop)
+        drop.anchor.detach()
+        mapObjects.remove(drop)
+        Log.d(TAG, "%s 재병합 #%d → #%d avg=(%.2f, %.2f) (%d회)".format(
+            obj.label, dropIndex, mapObjects.indexOf(keep), keep.x(), keep.z(), keep.count,
         ))
     }
 
-    /** 바닥 평면 위 거리 (높이 y는 무시하고 x, z만) */
-    private fun floorDistance(a: Pose, b: Pose): Float {
-        val dx = a.tx() - b.tx()
-        val dz = a.tz() - b.tz()
+    /** 가구 평균 위치와 관측 위치의 바닥 평면 위 거리 (높이 y는 무시하고 x, z만) */
+    private fun floorDistance(obj: MapObject, b: Pose) = floorDistance(obj, b.tx(), b.tz())
+
+    private fun floorDistance(obj: MapObject, x: Float, z: Float): Float {
+        val dx = obj.x() - x
+        val dz = obj.z() - z
         return sqrt(dx * dx + dz * dz)
     }
 
@@ -327,10 +376,7 @@ class ArRenderer(
             detectInfo = detectInfo,
             mapItems = mapObjects
                 .filter { it.anchor.trackingState == TrackingState.TRACKING }
-                .map {
-                    val p = it.anchor.pose
-                    MapItem(it.label, p.tx(), p.tz(), it.count, confirmed = it.count >= CONFIRM_COUNT)
-                },
+                .map { MapItem(it.label, it.x(), it.z(), it.count, confirmed = it.count >= CONFIRM_COUNT) },
             cameraX = camera.pose.tx(),
             cameraZ = camera.pose.tz(),
             // 카메라는 자기 -Z 방향을 바라봄 → 그 방향의 x, z 성분
@@ -387,7 +433,9 @@ class ArRenderer(
         const val EDGE_MARGIN_PX = 20f      // 박스 아래가 화면 끝에서 이만큼 안쪽이어야 바닥 접점으로 인정
         const val CONFIRM_COUNT = 3         // 이만큼 관측돼야 "확정" (가끔 나오는 오인식 걸러내기)
         // 종류별 병합 거리: 의자는 서로 붙어 있어서 작게, 테이블·소파는 크게
-        val MERGE_DISTANCE_M = mapOf("의자" to 0.35f, "테이블" to 0.6f, "소파" to 0.8f)
+        // 의자 0.55: 실측 로그에서 같은 의자 관측 간 최대 0.51m, 다른 의자 간 최소 0.65m (#3)
+        // 테이블·소파: 실측 없이 크기 비율로 추정 (의자 약 0.45m → 0.55, 테이블 약 0.8m → 0.8)
+        val MERGE_DISTANCE_M = mapOf("의자" to 0.55f, "테이블" to 0.8f, "소파" to 1.0f)
         // 박스 아래 접점(카메라 쪽 끝) → 가구 중심까지 거리. 카메라 반대 방향으로 이만큼 밀어 중심 추정
         val HALF_DEPTH_M = mapOf("의자" to 0.2f, "테이블" to 0.35f, "소파" to 0.4f)
         private const val TAG = "ArRenderer"
