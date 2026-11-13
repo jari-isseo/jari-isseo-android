@@ -42,14 +42,14 @@ data class ArUiState(
     val message: String = "바닥이나 벽을 비춘 뒤 화면을 탭하세요",
     val boxes: List<ScreenBox> = emptyList(),     // 8교시: 인식 박스
     val detectInfo: String = "",                  // 8교시: 추론 시간 등
-    // 9교시: 탑뷰 배치도 (월드 좌표, 미터. 위에서 내려다보면 x=좌우, z=앞뒤)
+    // 9교시: 탑뷰 배치도 (#6: 매장 좌표, 미터, 0 이상. 가장 긴 벽이 x축과 평행)
     val mapItems: List<MapItem> = emptyList(),
     val cameraX: Float = 0f,
     val cameraZ: Float = 0f,
     val headingX: Float = 0f,                     // 카메라가 바라보는 방향 (바닥 평면에 투영)
     val headingZ: Float = -1f,
-    val floorPolygon: List<Pair<Float, Float>> = emptyList(),   // #4: 바닥 외곽선 (월드 x, z)
-    val walls: List<WallLine> = emptyList(),                    // #5: 벽 선분 (월드 x, z)
+    val floorPolygon: List<Pair<Float, Float>> = emptyList(),   // #4: 바닥 외곽선 (매장 x, z)
+    val walls: List<WallLine> = emptyList(),                    // #5: 벽 선분 (매장 x, z)
 )
 
 /** 배치도에 올라간 가구 1개. confirmed = 여러 번 확인돼서 진짜일 가능성이 높은 것 */
@@ -386,6 +386,15 @@ class ArRenderer(
             if (anchors.size >= 2) distance(anchors[anchors.size - 2].pose, anchors.last().pose)
             else null
 
+        // #6: 월드 좌표 → 매장 좌표 (가장 긴 벽이 x축과 평행, 최소점 (0, 0))
+        val floorWorld = floorWorld()
+        val wallsWorld = wallsWorld()
+        val items = mapObjects.filter { it.anchor.trackingState == TrackingState.TRACKING }
+        val store = StoreFrame.of(floorWorld, wallsWorld, items.map { it.x() to it.z() })
+        val (camX, camZ) = store.point(camera.pose.tx() to camera.pose.tz())
+        // 카메라는 자기 -Z 방향을 바라봄 → 그 방향의 x, z 성분
+        val (headX, headZ) = store.direction(-camera.pose.zAxis[0], -camera.pose.zAxis[2])
+
         return ArUiState(
             status = statusOf(camera),
             floorPlanes = floors.size,
@@ -394,16 +403,16 @@ class ArRenderer(
             message = message,
             boxes = latestDetections.map { toView(frame, it) },
             detectInfo = detectInfo,
-            mapItems = mapObjects
-                .filter { it.anchor.trackingState == TrackingState.TRACKING }
-                .map { MapItem(it.label, it.x(), it.z(), it.count, confirmed = it.count >= CONFIRM_COUNT) },
-            cameraX = camera.pose.tx(),
-            cameraZ = camera.pose.tz(),
-            // 카메라는 자기 -Z 방향을 바라봄 → 그 방향의 x, z 성분
-            headingX = -camera.pose.zAxis[0],
-            headingZ = -camera.pose.zAxis[2],
-            floorPolygon = floorWorld(),
-            walls = wallsWorld(),
+            mapItems = items.map {
+                val (x, z) = store.point(it.x() to it.z())
+                MapItem(it.label, x, z, it.count, confirmed = it.count >= CONFIRM_COUNT)
+            },
+            cameraX = camX,
+            cameraZ = camZ,
+            headingX = headX,
+            headingZ = headZ,
+            floorPolygon = floorWorld.map(store::point),
+            walls = wallsWorld.map(store::wall),
         )
     }
 
