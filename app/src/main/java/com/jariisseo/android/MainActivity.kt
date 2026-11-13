@@ -2,11 +2,14 @@ package com.jariisseo.android
 
 import android.Manifest
 import android.annotation.SuppressLint
+import android.content.ClipData
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.Paint
 import android.opengl.GLSurfaceView
 import android.os.Bundle
 import android.view.MotionEvent
+import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
@@ -39,11 +42,16 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
+import androidx.core.content.FileProvider
 import com.jariisseo.android.ui.theme.JariIsseoTheme
 import com.google.ar.core.ArCoreApk
 import com.google.ar.core.Config
 import com.google.ar.core.Session
 import com.google.ar.core.exceptions.CameraNotAvailableException
+import java.io.File
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 class MainActivity : ComponentActivity() {
 
@@ -186,7 +194,11 @@ class MainActivity : ComponentActivity() {
                         color = Color.White,
                     )
                     Spacer(Modifier.height(6.dp))
-                    Button(onClick = { renderer.clear() }) { Text("모두 지우기") }
+                    Row {
+                        Button(onClick = { renderer.clear() }) { Text("모두 지우기") }
+                        Spacer(Modifier.width(8.dp))
+                        Button(onClick = { exportLayout() }) { Text("JSON 내보내기") }
+                    }
                 }
                 Spacer(Modifier.width(8.dp))
                 MiniMap(state, Modifier.size(150.dp))
@@ -254,6 +266,35 @@ class MainActivity : ComponentActivity() {
         textSize = 40f
         isFakeBoldText = true
         setShadowLayer(4f, 0f, 0f, android.graphics.Color.BLACK)
+    }
+
+    /**
+     * #7: 지금 화면 상태를 배치 JSON으로 저장 → 공유 시트로 보내기.
+     * 상태 문구(status)는 매 프레임 덮어써져서 안내는 Toast로
+     */
+    private fun exportLayout() {
+        val state = uiState
+        val problem = when {
+            state.floorPolygon.size < 3 -> "바닥 외곽선이 아직 없어요. 바닥을 더 비춰주세요"
+            state.mapItems.none { it.confirmed && it.label == "테이블" } -> "확정된 테이블이 없어요"
+            else -> null
+        }
+        if (problem != null) {
+            Toast.makeText(this, problem, Toast.LENGTH_SHORT).show()
+            return
+        }
+
+        val dir = File(cacheDir, "exports").apply { mkdirs() }
+        val name = "layout-${SimpleDateFormat("yyyyMMdd-HHmmss", Locale.US).format(Date())}.json"
+        val file = File(dir, name).apply { writeText(toLayoutJson(state)) }
+        val uri = FileProvider.getUriForFile(this, "$packageName.fileprovider", file)
+        val send = Intent(Intent.ACTION_SEND).apply {
+            type = "application/json"
+            putExtra(Intent.EXTRA_STREAM, uri)
+            clipData = ClipData.newRawUri(name, uri)
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        }
+        startActivity(Intent.createChooser(send, "배치 JSON 보내기"))
     }
 
     private fun showStatus(text: String) {
