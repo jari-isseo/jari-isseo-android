@@ -15,7 +15,6 @@ import com.google.ar.core.TrackingFailureReason
 import com.google.ar.core.TrackingState
 import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.Executors
-import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import javax.microedition.khronos.egl.EGLConfig
 import javax.microedition.khronos.opengles.GL10
@@ -106,9 +105,8 @@ class ArRenderer(
 
     /** 앱 종료 시: 인식 스레드를 멈추고 모델 해제 */
     fun release() {
-        detectExecutor.shutdown()
-        detectExecutor.awaitTermination(1, TimeUnit.SECONDS)
-        detector?.close()
+        detectExecutor.execute { detector?.close() }   // 진행 중인 추론이 끝난 뒤 실행됨
+        detectExecutor.shutdown()                       // 새 작업만 막고, 기다리지 않음
     }
 
     /** UI 스레드에서 호출: 탭 위치를 큐에 넣기만 함 (실제 처리는 다음 프레임에 GL 스레드에서) */
