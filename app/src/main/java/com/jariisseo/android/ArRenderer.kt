@@ -130,8 +130,10 @@ class ArRenderer(
     private var processedGeneration = 0                   // 이미 투영한 인식 결과 번호
 
     // ── #4: 바닥 외곽선 (본 바닥을 누적, 1초에 한 번 다시 계산) ──
+    // 누적은 바닥 앵커 기준 좌표로 → ARCore가 지도를 보정해도 가구(앵커)와 함께 따라감
     private val floorMap = FloorPolygon()
-    private var floorPolygon = emptyList<Pair<Float, Float>>()
+    private var floorAnchor: Anchor? = null
+    private var floorLocal = emptyList<Pair<Float, Float>>()   // 바닥 앵커 기준 외곽선
     private var lastFloorBuildNs = 0L
 
     /** 앱 종료 시: 인식 스레드를 멈추고 모델 해제 */
@@ -187,8 +189,7 @@ class ArRenderer(
                 anchors.clear()
                 mapObjects.forEach { it.anchor.detach() }   // 9교시: 배치도도 초기화
                 mapObjects.clear()
-                floorMap.clear()                            // #4: 누적한 바닥도 초기화
-                floorPolygon = emptyList()
+                resetFloor(null)                            // #4: 누적한 바닥도 초기화
                 clearRequested = false
                 message = "점과 배치도를 모두 지웠어요"
             }
@@ -395,8 +396,23 @@ class ArRenderer(
             // 카메라는 자기 -Z 방향을 바라봄 → 그 방향의 x, z 성분
             headingX = -camera.pose.zAxis[0],
             headingZ = -camera.pose.zAxis[2],
-            floorPolygon = floorPolygon,
+            floorPolygon = floorWorld(),
         )
+    }
+
+    /** 바닥 앵커 기준 외곽선 → 지금의 월드 좌표 (앵커를 놓쳤으면 표시하지 않음) */
+    private fun floorWorld(): List<Pair<Float, Float>> {
+        val anchor = floorAnchor?.takeIf { it.trackingState == TrackingState.TRACKING } ?: return emptyList()
+        val pose = anchor.pose
+        return floorLocal.map { (x, z) -> pose.transformPoint(floatArrayOf(x, 0f, z)).let { it[0] to it[2] } }
+    }
+
+    /** 누적한 바닥을 비우고, 바닥 앵커를 새 평면 위에 다시 만듦 (plane = null이면 앵커 없음) */
+    private fun resetFloor(plane: Plane?) {
+        floorAnchor?.detach()
+        floorAnchor = plane?.createAnchor(plane.centerPose)
+        floorMap.clear()
+        floorLocal = emptyList()
     }
 
     /** 위를 향한 수평면 중 가장 낮은 높이 ± FLOOR_TOLERANCE_M 안의 것 = 바닥 (책상 윗면·의자 앉는 면 제외) */
@@ -406,23 +422,35 @@ class ArRenderer(
         return up.filter { it.centerPose.ty() - floorY < FLOOR_TOLERANCE_M }
     }
 
-    /** 바닥 평면들의 경계(평면 로컬 x, z) → 월드 (x, z) → 누적 → 합집합 외곽선 */
+    /** 바닥 평면들의 경계(평면 로컬 x, z) → 월드 → 바닥 앵커 기준 (x, z) → 누적 → 합집합 외곽선 */
     private fun updateFloorPolygon(floors: List<Plane>) {
+        val lowest = floors.minByOrNull { it.centerPose.ty() } ?: return
+        val anchor = floorAnchor
+        // 처음이거나, 지금까지 바닥으로 본 것(예: 책상 윗면)보다 더 낮은 진짜 바닥이 나타나면 처음부터 다시 누적
+        if (anchor == null || anchor.trackingState == TrackingState.STOPPED ||
+            lowest.centerPose.ty() < anchor.pose.ty() - FLOOR_TOLERANCE_M
+        ) {
+            if (anchor != null) Log.d(TAG, "바닥 높이 변경 %.2f → %.2f: 누적 바닥 초기화".format(anchor.pose.ty(), lowest.centerPose.ty()))
+            resetFloor(lowest)
+        }
+        val current = floorAnchor?.takeIf { it.trackingState == TrackingState.TRACKING } ?: return
+        val toLocal = current.pose.inverse()
+
         val pieces = floors.map { plane ->
             val buf = plane.polygon
             (0 until buf.limit() / 2).map { i ->
-                val p = plane.centerPose.transformPoint(floatArrayOf(buf.get(2 * i), 0f, buf.get(2 * i + 1)))
-                p[0] to p[2]
+                val world = plane.centerPose.transformPoint(floatArrayOf(buf.get(2 * i), 0f, buf.get(2 * i + 1)))
+                toLocal.transformPoint(world).let { it[0] to it[2] }
             }
         }
         floorMap.add(pieces)
         val polygon = floorMap.polygon()
-        if (polygon != floorPolygon) {
+        if (polygon != floorLocal) {
             Log.d(TAG, "바닥 조각 %d개 누적 → 외곽선 꼭짓점 %d개, 면적 %.1fm²".format(
                 floors.size, polygon.size, FloorPolygon.area(polygon),
             ))
         }
-        floorPolygon = polygon
+        floorLocal = polygon
     }
 
     /** 앵커의 3D 위치를 화면 픽셀 좌표로 변환 */

@@ -11,7 +11,8 @@ import kotlin.math.hypot
  * - 좌표는 바닥 평면 (x, z), 단위 m. ARCore에 의존하지 않아 단위 테스트 가능
  */
 class FloorPolygon {
-    private val seen = HashSet<Long>()   // 바닥으로 본 칸 (월드 격자 ix, iz)
+    private val seen = HashSet<Long>()       // 바닥으로 본 칸 (격자 ix, iz)
+    private var shown = emptySet<Long>()     // 직전에 외곽선으로 그린 영역 (점프 방지)
 
     /** 지금 보이는 바닥 조각들을 누적 */
     fun add(pieces: List<List<Pair<Float, Float>>>) {
@@ -26,7 +27,10 @@ class FloorPolygon {
         }
     }
 
-    fun clear() = seen.clear()
+    fun clear() {
+        seen.clear()
+        shown = emptySet()
+    }
 
     /** 누적한 바닥 → 하나의 단순 다각형 (본 바닥이 없으면 빈 리스트) */
     fun polygon(): List<Pair<Float, Float>> {
@@ -41,8 +45,15 @@ class FloorPolygon {
         var closed = grid
         repeat(CLOSE_CELLS) { closed = closed.dilate() }
         repeat(CLOSE_CELLS) { closed = closed.erode() }
-        // 가장 큰 영역만, 구멍·대각선 접점 정리 → 외곽선이 고리 1개가 되도록
-        val region = closed.largestRegion().tidy()
+        // 영역 하나만 고름: 직전에 그린 영역과 겹치는 것 우선 (떨어진 더 큰 조각으로 점프하지 않게), 없으면 가장 큰 것
+        val regions = closed.regions()
+        val cellKey = { i: Int -> key(i % closed.cols + minC, i / closed.cols + minR) }
+        val chosen = regions.maxByOrNull { r -> r.count { cellKey(it) in shown } }?.takeIf { r -> r.any { cellKey(it) in shown } }
+            ?: regions.maxByOrNull { it.size }
+            ?: return emptyList()
+        shown = chosen.mapTo(HashSet()) { cellKey(it) }
+        // 구멍·대각선 접점 정리 → 외곽선이 고리 1개가 되도록
+        val region = closed.only(chosen).tidy()
         val outline = region.trace().map { (ix, iz) -> (minC + ix) * CELL_M to (minR + iz) * CELL_M }
         val straight = removeCollinear(outline)
         val simplified = simplifyClosed(straight, SIMPLIFY_M)
@@ -159,14 +170,15 @@ class FloorPolygon {
             return out
         }
 
-        fun largestRegion(): Grid {
+        /** 칠한 칸의 연결 영역들 (칸 인덱스 목록) */
+        fun regions(): List<List<Int>> {
             val seen = BooleanArray(cells.size)
-            var best = emptyList<Int>()
-            for (i in cells.indices) {
-                if (cells[i] && !seen[i]) flood(i % cols, i / cols, seen).let { if (it.size > best.size) best = it }
+            return cells.indices.filter { cells[it] && !seen[it] }.mapNotNull { i ->
+                if (seen[i]) null else flood(i % cols, i / cols, seen)
             }
-            return Grid(cols, rows).also { g -> best.forEach { g.cells[it] = true } }
         }
+
+        fun only(region: List<Int>) = Grid(cols, rows).also { g -> region.forEach { g.cells[it] = true } }
 
         /** 안쪽 구멍을 메우고, 대각선으로만 닿는 칸(외곽선이 한 점에서 만나는 곳)을 채움. 바뀌는 게 없을 때까지 */
         fun tidy(): Grid {
