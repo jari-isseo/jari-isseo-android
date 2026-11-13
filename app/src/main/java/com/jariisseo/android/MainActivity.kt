@@ -224,7 +224,9 @@ class MainActivity : ComponentActivity() {
             session?.resume()
         } catch (e: CameraNotAvailableException) {
             showStatus("카메라를 열 수 없어요 (다른 앱이 사용 중?)")
+            session?.close()
             session = null
+            renderer.session = null
             return
         }
 
