@@ -78,6 +78,15 @@ class CornerOutlineTest {
     }
 
     @Test
+    fun sameWallThreeTimes_hasZeroArea() {
+        // 완료 시 넓이 검사(ArRenderer)로 거르는 경우
+        val w = touch(1f, 0f, 0f, 1f)
+        val out = CornerOutline.fromWalls(listOf(w, w, w))
+
+        assertEquals(0f, FloorPolygon.area(out), 1e-4f)
+    }
+
+    @Test
     fun segment_liesAlongWall() {
         val (a, b) = CornerOutline.segment(touch(2f, 0f, 0f, 1f))
 

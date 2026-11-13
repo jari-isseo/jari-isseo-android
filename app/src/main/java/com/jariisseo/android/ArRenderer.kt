@@ -153,7 +153,8 @@ class ArRenderer(
     private val pendingOutlineOps = ConcurrentLinkedQueue<OutlineOp>()
     private val wallTouchesLocal = mutableListOf<WallTouch>()   // GL 스레드에서만 다룸
     private var outlineClosed = false
-    private var lastTrackedPose: Pose? = null
+    // 카메라·기준 앵커가 둘 다 추적 중일 때의 "기준 앵커 기준 카메라 pose" (추적을 놓친 프레임의 pose는 섞지 않음)
+    private var lastLocalCameraPose: Pose? = null
     private var lastTrackedNs = 0L
 
     /** 앱 종료 시: 인식 스레드를 멈추고 모델 해제 */
@@ -218,11 +219,12 @@ class ArRenderer(
                 clearRequested = false
                 message = "점과 배치도를 모두 지웠어요"
             }
-            if (camera.trackingState == TrackingState.TRACKING) {
-                lastTrackedPose = camera.pose
+            val anchor = trackedMapAnchor()
+            if (camera.trackingState == TrackingState.TRACKING && anchor != null) {
+                lastLocalCameraPose = anchor.pose.inverse().compose(camera.pose)
                 lastTrackedNs = frame.timestamp
             }
-            handleOutlineOps(frame, camera)
+            handleOutlineOps(frame)
             handleTaps(frame, camera)
             maybeStartDetection(frame)
             if (camera.trackingState == TrackingState.TRACKING) projectDetections(frame)   // 9교시
@@ -255,10 +257,10 @@ class ArRenderer(
         }
     }
 
-    private fun handleOutlineOps(frame: Frame, camera: Camera) {
+    private fun handleOutlineOps(frame: Frame) {
         while (true) {
             when (pendingOutlineOps.poll() ?: return) {
-                OutlineOp.RECORD -> onWallRecord(recordWall(frame, camera))
+                OutlineOp.RECORD -> onWallRecord(recordWall(frame))
                 OutlineOp.UNDO -> {
                     if (outlineClosed) outlineClosed = false else wallTouchesLocal.removeLastOrNull()
                     message = "벽 ${wallTouchesLocal.size}개 기록"
@@ -271,6 +273,9 @@ class ArRenderer(
                 OutlineOp.CLOSE -> {
                     if (wallTouchesLocal.size < 3) {
                         message = "벽을 3개 이상 기록해야 완료할 수 있어요"
+                    } else if (FloorPolygon.area(CornerOutline.fromWalls(wallTouchesLocal)) < MIN_OUTLINE_AREA_M2) {
+                        // 같은 벽을 여러 번 기록하는 등 벽 방향이 겹치면 넓이 0인 외곽선이 됨
+                        message = "벽 방향이 겹치거나 나란해요. 다른 벽을 기록해 주세요"
                     } else {
                         outlineClosed = true
                         message = "외곽선 완료 (벽 ${wallTouchesLocal.size}개)"
@@ -284,34 +289,32 @@ class ArRenderer(
      * #38: 폰 화면을 벽에 댄 순간의 카메라 pose → 벽 1개. 기록했으면 true.
      * 화면을 대면 뒷면 카메라가 방 안을 봐서 추적이 유지됨 (뒷면을 대도 벽 선은 같음).
      * 위치 = 벽 위 한 점, 카메라 Z축을 바닥에 투영 = 벽 법선.
-     * 그래도 추적을 놓쳤으면 직전(RECENT_POSE_NS 이내) 추적 pose 사용
+     * 카메라·기준 앵커가 둘 다 추적 중일 때 저장한 기준 앵커 기준 pose를 씀 → 이번 프레임에 추적을 놓쳤으면
+     * 직전(RECENT_POSE_NS 이내) 값. 추적을 놓친 프레임의 앵커 pose와 과거 카메라 pose를 섞지 않음
      */
-    private fun recordWall(frame: Frame, camera: Camera): Boolean {
+    private fun recordWall(frame: Frame): Boolean {
         if (outlineClosed) {
             message = "외곽선이 완료됐어요. [되돌리기]로 다시 고칠 수 있어요"
             return false
         }
-        val anchor = mapAnchor?.takeIf { it.trackingState != TrackingState.STOPPED }
-        if (anchor == null) {
+        val local = lastLocalCameraPose
+        if (local == null) {
             message = "아직 위치를 못 잡았어요. 주변을 비추며 천천히 움직여 주세요"
             return false
         }
-        val tracking = camera.trackingState == TrackingState.TRACKING
-        val pose = if (tracking) camera.pose
-            else lastTrackedPose?.takeIf { frame.timestamp - lastTrackedNs <= RECENT_POSE_NS }
-        if (pose == null) {
+        val ageNs = frame.timestamp - lastTrackedNs
+        if (ageNs > RECENT_POSE_NS) {
             message = "추적을 놓쳤어요. 벽에서 폰을 떼고 주변을 비춘 뒤 다시 기록해 주세요"
             return false
         }
-        val toLocal = anchor.pose.inverse()
-        val p = toLocal.transformPoint(pose.translation)
-        val n = toLocal.rotateVector(pose.zAxis)
+        val p = local.translation
+        val n = local.zAxis
         if (sqrt(n[0] * n[0] + n[2] * n[2]) < 0.5f) {   // 폰이 바닥·천장 쪽을 향함 (60° 이상 기울어짐)
             message = "폰을 세워서 화면을 벽에 평평하게 대 주세요"
             return false
         }
         wallTouchesLocal += WallTouch(p[0], p[2], n[0], n[2])
-        val source = if (tracking) "추적 중" else "직전 pose ${(frame.timestamp - lastTrackedNs) / 1_000_000}ms 전"
+        val source = if (ageNs == 0L) "추적 중" else "직전 pose ${ageNs / 1_000_000}ms 전"
         Log.d(TAG, "벽 기록 #%d: (%.2f, %.2f) 법선 (%.2f, %.2f) · %s".format(
             wallTouchesLocal.size, p[0], p[2], n[0], n[2], source,
         ))
@@ -570,6 +573,7 @@ class ArRenderer(
         wallsLocal = emptyList()
         wallTouchesLocal.clear()   // #38: 기준 앵커 좌표라 함께 비움
         outlineClosed = false
+        lastLocalCameraPose = null
     }
 
     /** 평면 경계 점들의 월드 좌표 (x, y, z) */
@@ -741,6 +745,8 @@ class ArRenderer(
         const val WALL_MIN_OBS_M = 0.6f
         // #38: 벽에 대서 추적을 놓쳤을 때 이 시간 안의 직전 추적 pose를 씀
         private const val RECENT_POSE_NS = 1_500_000_000L
+        // #38: 이보다 좁은 외곽선은 완료하지 않음 (벽 방향이 겹친 경우)
+        private const val MIN_OUTLINE_AREA_M2 = 1f
         private const val TAG = "ArRenderer"
     }
 }
