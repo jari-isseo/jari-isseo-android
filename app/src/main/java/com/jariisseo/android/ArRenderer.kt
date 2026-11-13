@@ -19,6 +19,7 @@ import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
 import javax.microedition.khronos.egl.EGLConfig
 import javax.microedition.khronos.opengles.GL10
+import kotlin.math.atan2
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.sqrt
@@ -36,7 +37,6 @@ data class ScreenBox(
 data class ArUiState(
     val status: String = "확인 중...",
     val floorPlanes: Int = 0,                     // #4: 바닥 높이의 평면만 (책상 윗면·의자 앉는 면 제외)
-    val verticalPlanes: Int = 0,
     val points: List<ScreenPoint> = emptyList(),
     val lastDistanceM: Float? = null,
     val message: String = "바닥이나 벽을 비춘 뒤 화면을 탭하세요",
@@ -49,6 +49,7 @@ data class ArUiState(
     val headingX: Float = 0f,                     // 카메라가 바라보는 방향 (바닥 평면에 투영)
     val headingZ: Float = -1f,
     val floorPolygon: List<Pair<Float, Float>> = emptyList(),   // #4: 바닥 외곽선 (월드 x, z)
+    val walls: List<WallLine> = emptyList(),                    // #5: 벽 선분 (월드 x, z)
 )
 
 /** 배치도에 올라간 가구 1개. confirmed = 여러 번 확인돼서 진짜일 가능성이 높은 것 */
@@ -129,12 +130,16 @@ class ArRenderer(
     private val mapObjects = mutableListOf<MapObject>()   // GL 스레드에서만 다룸
     private var processedGeneration = 0                   // 이미 투영한 인식 결과 번호
 
-    // ── #4: 바닥 외곽선 (본 바닥을 누적, 1초에 한 번 다시 계산) ──
-    // 누적은 바닥 앵커 기준 좌표로 → ARCore가 지도를 보정해도 가구(앵커)와 함께 따라감
+    // ── #4·#5: 바닥 외곽선·벽 (본 것을 누적, 1초에 한 번 다시 계산) ──
+    // 누적은 기준 앵커(추적 시작 위치에 1개) 좌표로 → ARCore가 지도를 보정해도 가구(앵커)와 함께 따라감.
+    // 기준 앵커는 바닥과 무관하게 유지 → 바닥을 다시 잡아도 벽 좌표가 바뀌지 않음
+    private var mapAnchor: Anchor? = null
     private val floorMap = FloorPolygon()
-    private var floorAnchor: Anchor? = null
-    private var floorLocal = emptyList<Pair<Float, Float>>()   // 바닥 앵커 기준 외곽선
+    private var floorLocal = emptyList<Pair<Float, Float>>()   // 기준 앵커 좌표 외곽선
+    private var floorLocalY: Float? = null                     // 지금 바닥으로 보는 높이 (기준 앵커 좌표 y)
     private var lastFloorBuildNs = 0L
+    private val wallMap = WallSegments()
+    private var wallsLocal = emptyList<WallLine>()
 
     /** 앱 종료 시: 인식 스레드를 멈추고 모델 해제 */
     fun release() {
@@ -189,7 +194,7 @@ class ArRenderer(
                 anchors.clear()
                 mapObjects.forEach { it.anchor.detach() }   // 9교시: 배치도도 초기화
                 mapObjects.clear()
-                resetFloor(null)                            // #4: 누적한 바닥도 초기화
+                resetMap()                                  // #4·#5: 누적한 바닥·벽도 초기화
                 clearRequested = false
                 message = "점과 배치도를 모두 지웠어요"
             }
@@ -367,7 +372,9 @@ class ArRenderer(
         val floors = floorPlanes(planes)
         if (frame.timestamp - lastFloorBuildNs >= FLOOR_BUILD_INTERVAL_NS) {
             lastFloorBuildNs = frame.timestamp
+            ensureMapAnchor(session, camera)
             updateFloorPolygon(floors)
+            updateWalls(session)
         }
 
         // 3D 월드 좌표 → 화면 좌표 변환 행렬 = 투영 × 뷰
@@ -382,7 +389,6 @@ class ArRenderer(
         return ArUiState(
             status = statusOf(camera),
             floorPlanes = floors.size,
-            verticalPlanes = planes.count { it.type == Plane.Type.VERTICAL },
             points = anchors.map { toScreen(it) },
             lastDistanceM = lastDistance,
             message = message,
@@ -397,22 +403,126 @@ class ArRenderer(
             headingX = -camera.pose.zAxis[0],
             headingZ = -camera.pose.zAxis[2],
             floorPolygon = floorWorld(),
+            walls = wallsWorld(),
         )
     }
 
-    /** 바닥 앵커 기준 외곽선 → 지금의 월드 좌표 (앵커를 놓쳤으면 표시하지 않음) */
-    private fun floorWorld(): List<Pair<Float, Float>> {
-        val anchor = floorAnchor?.takeIf { it.trackingState == TrackingState.TRACKING } ?: return emptyList()
-        val pose = anchor.pose
-        return floorLocal.map { (x, z) -> pose.transformPoint(floatArrayOf(x, 0f, z)).let { it[0] to it[2] } }
+    /** 기준 앵커가 없으면(처음·지우기 후·추적 완전 중지) 지금 카메라 위치에 만듦. 방향은 월드 축 그대로(y = 위) */
+    private fun ensureMapAnchor(session: Session, camera: Camera) {
+        if (mapAnchor?.trackingState == TrackingState.STOPPED) resetMap()
+        if (mapAnchor != null || camera.trackingState != TrackingState.TRACKING) return
+        val p = camera.pose
+        mapAnchor = session.createAnchor(Pose.makeTranslation(p.tx(), p.ty(), p.tz()))
     }
 
-    /** 누적한 바닥을 비우고, 바닥 앵커를 새 평면 위에 다시 만듦 (plane = null이면 앵커 없음) */
-    private fun resetFloor(plane: Plane?) {
-        floorAnchor?.detach()
-        floorAnchor = plane?.createAnchor(plane.centerPose)
+    /** 추적 중인 기준 앵커 (놓쳤으면 null) */
+    private fun trackedMapAnchor() = mapAnchor?.takeIf { it.trackingState == TrackingState.TRACKING }
+
+    /** 기준 앵커 좌표 (x, z) → 지금의 월드 (x, z). 앵커를 놓쳤으면 null */
+    private fun anchorToWorld(): ((Pair<Float, Float>) -> Pair<Float, Float>)? {
+        val pose = trackedMapAnchor()?.pose ?: return null
+        val y = floorLocalY ?: 0f
+        return { (x, z) -> pose.transformPoint(floatArrayOf(x, y, z)).let { it[0] to it[2] } }
+    }
+
+    /** 기준 앵커 좌표 외곽선 → 지금의 월드 좌표 (앵커를 놓쳤으면 표시하지 않음) */
+    private fun floorWorld(): List<Pair<Float, Float>> {
+        val toWorld = anchorToWorld() ?: return emptyList()
+        return floorLocal.map(toWorld)
+    }
+
+    /** 기준 앵커 좌표 벽 선분 → 지금의 월드 좌표 */
+    private fun wallsWorld(): List<WallLine> {
+        val toWorld = anchorToWorld() ?: return emptyList()
+        return wallsLocal.map { (a, b) -> toWorld(a) to toWorld(b) }
+    }
+
+    /** 누적한 바닥만 비움 (더 낮은 진짜 바닥이 나타났을 때). 벽은 유지 */
+    private fun resetFloor() {
         floorMap.clear()
         floorLocal = emptyList()
+    }
+
+    /** 기준 앵커와 누적한 바닥·벽을 모두 비움 ("모두 지우기", 추적 중지) */
+    private fun resetMap() {
+        mapAnchor?.detach()
+        mapAnchor = null
+        resetFloor()
+        floorLocalY = null
+        wallMap.clear()
+        wallsLocal = emptyList()
+    }
+
+    /** 평면 경계 점들의 월드 좌표 (x, y, z) */
+    private fun boundaryWorld(plane: Plane): List<FloatArray> {
+        val buf = plane.polygon
+        return (0 until buf.limit() / 2).map { i ->
+            plane.centerPose.transformPoint(floatArrayOf(buf.get(2 * i), 0f, buf.get(2 * i + 1)))
+        }
+    }
+
+    /**
+     * #5: 수직 평면 중 벽만 골라 바닥 위 선분으로 → 평면마다 최신 선분 1개 저장 → 벽 목록 다시 묶기.
+     * 책상 옆판·PC 본체(낮음), 작은 조각(좁음)은 제외. 모니터 등 짧은 것은 WallSegments가 최소 길이로 거름.
+     * 다른 평면에 합쳐졌거나 추적이 완전히 끝난 평면은 지우고, 잠시 안 보이는 평면은 마지막 선분 유지
+     */
+    private fun updateWalls(session: Session) {
+        val anchor = trackedMapAnchor() ?: return
+        val localY = floorLocalY ?: return   // 바닥을 아직 못 잡았으면 벽 높이를 잴 수 없음
+        val floorY = anchor.pose.transformPoint(floatArrayOf(0f, localY, 0f))[1]
+        val toLocal = anchor.pose.inverse()
+
+        var candidateCount = 0
+        for (plane in session.getAllTrackables(Plane::class.java)) {
+            if (plane.type != Plane.Type.VERTICAL) continue
+            if (plane.subsumedBy != null || plane.trackingState == TrackingState.STOPPED) {
+                wallMap.remove(plane)
+                continue
+            }
+            if (plane.trackingState != TrackingState.TRACKING) continue   // 잠시 놓침: 마지막 선분 유지
+            val line = wallLineOf(plane, floorY, toLocal)
+            if (line == null) wallMap.remove(plane) else { wallMap.put(plane, line); candidateCount++ }
+        }
+        // 방 중심 = 바닥 외곽선 꼭짓점 평균 (겹친 평행 벽 중 바깥쪽 고르기용)
+        val center = floorLocal.takeIf { it.isNotEmpty() }?.let { f -> f.sumOf { it.first.toDouble() }.toFloat() / f.size to f.sumOf { it.second.toDouble() }.toFloat() / f.size }
+        val walls = wallMap.walls(center, floorLocal)
+        if (walls != wallsLocal) {
+            Log.d(TAG, "벽 후보 평면 %d개 → 벽 선분 %d개 (길이 %s)".format(
+                candidateCount, walls.size,
+                walls.joinToString { (a, b) -> "%.1fm".format(sqrt((b.first - a.first).let { it * it } + (b.second - a.second).let { it * it })) },
+            ))
+            walls.forEachIndexed { i, (a, b) ->
+                // 각도: x축 기준 0~180° (같은 방향 벽끼리 비교용)
+                val deg = (Math.toDegrees(atan2((b.second - a.second).toDouble(), (b.first - a.first).toDouble())) + 180.0) % 180.0
+                Log.d(TAG, "  벽 #%d: (%.2f, %.2f) → (%.2f, %.2f), 각도 %.0f°".format(i, a.first, a.second, b.first, b.second, deg))
+            }
+        }
+        wallsLocal = walls
+    }
+
+    /** 벽 후보 평면 → 기준 앵커 좌표의 바닥 위 선분 (벽이 아니면 null) */
+    private fun wallLineOf(plane: Plane, floorY: Float, toLocal: Pose): WallLine? {
+        val world = boundaryWorld(plane)
+        if (world.isEmpty()) return null
+        val top = world.maxOf { it[1] } - floorY
+        val height = top - (world.minOf { it[1] } - floorY)
+        // 모니터(꼭대기 ~1.25m, 화면 높이 ~0.35m)·책상 옆판·의자 등받이 제외
+        if (top < WALL_MIN_TOP_M || height < WALL_MIN_HEIGHT_M) return null
+        val pts = world.map { toLocal.transformPoint(it).let { p -> p[0] to p[2] } }
+        // 벽 방향 = 바닥 위에서 법선(평면 y축)에 수직인 방향
+        val n = toLocal.rotateVector(plane.centerPose.yAxis)
+        val len = sqrt(n[0] * n[0] + n[2] * n[2])
+        if (len < 1e-3f) return null
+        val dx = -n[2] / len
+        val dz = n[0] / len
+        val cx = pts.sumOf { it.first.toDouble() }.toFloat() / pts.size
+        val cz = pts.sumOf { it.second.toDouble() }.toFloat() / pts.size
+        val ts = pts.map { (x, z) -> (x - cx) * dx + (z - cz) * dz }
+        val t0 = ts.min()
+        val t1 = ts.max()
+        if (t1 - t0 < WALL_MIN_OBS_M) return null
+        Log.d(TAG, "벽 후보 %08x: 꼭대기 %.2fm · 높이 %.2fm · 폭 %.2fm · 중심 (%.2f, %.2f)".format(plane.hashCode(), top, height, t1 - t0, cx, cz))
+        return ((cx + dx * t0) to (cz + dz * t0)) to ((cx + dx * t1) to (cz + dz * t1))
     }
 
     /** 위를 향한 수평면 중 가장 낮은 높이 ± FLOOR_TOLERANCE_M 안의 것 = 바닥 (책상 윗면·의자 앉는 면 제외) */
@@ -422,26 +532,22 @@ class ArRenderer(
         return up.filter { it.centerPose.ty() - floorY < FLOOR_TOLERANCE_M }
     }
 
-    /** 바닥 평면들의 경계(평면 로컬 x, z) → 월드 → 바닥 앵커 기준 (x, z) → 누적 → 합집합 외곽선 */
+    /** 바닥 평면들의 경계(평면 로컬 x, z) → 월드 → 기준 앵커 좌표 (x, z) → 누적 → 합집합 외곽선 */
     private fun updateFloorPolygon(floors: List<Plane>) {
         val lowest = floors.minByOrNull { it.centerPose.ty() } ?: return
-        val anchor = floorAnchor
-        // 처음이거나, 지금까지 바닥으로 본 것(예: 책상 윗면)보다 더 낮은 진짜 바닥이 나타나면 처음부터 다시 누적
-        if (anchor == null || anchor.trackingState == TrackingState.STOPPED ||
-            lowest.centerPose.ty() < anchor.pose.ty() - FLOOR_TOLERANCE_M
-        ) {
-            if (anchor != null) Log.d(TAG, "바닥 높이 변경 %.2f → %.2f: 누적 바닥 초기화".format(anchor.pose.ty(), lowest.centerPose.ty()))
-            resetFloor(lowest)
+        val anchor = trackedMapAnchor() ?: return
+        val toLocal = anchor.pose.inverse()
+        val lowestY = toLocal.transformPoint(lowest.centerPose.translation)[1]
+        // 처음이거나, 지금까지 바닥으로 본 것(예: 책상 윗면)보다 더 낮은 진짜 바닥이 나타나면 바닥만 다시 누적 (벽은 유지)
+        val prevY = floorLocalY
+        if (prevY == null || lowestY < prevY - FLOOR_TOLERANCE_M) {
+            if (prevY != null) Log.d(TAG, "바닥 높이 변경 %.2f → %.2f: 누적 바닥 초기화 (벽 유지)".format(prevY, lowestY))
+            resetFloor()
+            floorLocalY = lowestY
         }
-        val current = floorAnchor?.takeIf { it.trackingState == TrackingState.TRACKING } ?: return
-        val toLocal = current.pose.inverse()
 
         val pieces = floors.map { plane ->
-            val buf = plane.polygon
-            (0 until buf.limit() / 2).map { i ->
-                val world = plane.centerPose.transformPoint(floatArrayOf(buf.get(2 * i), 0f, buf.get(2 * i + 1)))
-                toLocal.transformPoint(world).let { it[0] to it[2] }
-            }
+            boundaryWorld(plane).map { toLocal.transformPoint(it).let { p -> p[0] to p[2] } }
         }
         floorMap.add(pieces)
         val polygon = floorMap.polygon()
@@ -508,7 +614,12 @@ class ArRenderer(
         val HALF_DEPTH_M = mapOf("의자" to 0.2f, "테이블" to 0.35f, "소파" to 0.4f)
         // #4: 가장 낮은 수평면에서 이 높이 안이면 바닥 (책상 윗면 ~0.7m, 의자 앉는 면 ~0.45m는 제외)
         const val FLOOR_TOLERANCE_M = 0.15f
-        private const val FLOOR_BUILD_INTERVAL_NS = 1_000_000_000L   // 바닥 외곽선은 1초에 한 번만 계산
+        private const val FLOOR_BUILD_INTERVAL_NS = 1_000_000_000L   // 바닥 외곽선·벽은 1초에 한 번만 계산
+        // #5: 벽 후보 — 평면 꼭대기가 바닥에서 이 높이 이상 (책상 옆판 ~0.75m, 모니터 ~1.25m 제외),
+        // 평면 세로 높이가 이 이상 (모니터 화면 ~0.35m 제외), 가로 폭이 이 이상
+        const val WALL_MIN_TOP_M = 1.5f
+        const val WALL_MIN_HEIGHT_M = 0.6f
+        const val WALL_MIN_OBS_M = 0.6f
         private const val TAG = "ArRenderer"
     }
 }
