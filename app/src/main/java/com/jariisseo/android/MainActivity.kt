@@ -154,7 +154,7 @@ class MainActivity : ComponentActivity() {
             ) {
                 Text(state.status, color = Color.White)
                 Text(
-                    "평면: 바닥 ${state.floorPlanes}개 · 벽 ${state.verticalPlanes}개",
+                    "평면: 바닥 ${state.floorPlanes}개 · 벽 ${state.walls.size}개",
                     color = Color.White,
                 )
                 Text(modelInfo, color = Color.Yellow)   // ★ 8교시

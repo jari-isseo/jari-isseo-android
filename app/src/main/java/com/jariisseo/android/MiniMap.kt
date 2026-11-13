@@ -20,6 +20,7 @@ import kotlin.math.max
  * - 격자 한 칸 = 1m
  * - 확정된 가구는 진하게, 아직 관측이 적은 가구는 흐리게
  * - #4: 바닥 외곽선(floor.polygon)을 노란 테두리로
+ * - #5: 벽(walls)을 주황 굵은 선으로
  */
 @Composable
 fun MiniMap(state: ArUiState, modifier: Modifier = Modifier) {
@@ -31,6 +32,9 @@ fun MiniMap(state: ArUiState, modifier: Modifier = Modifier) {
         var range = 2.5f
         state.mapItems.forEach { range = max(range, max(abs(it.x - camX), abs(it.z - camZ)) + 0.5f) }
         state.floorPolygon.forEach { (x, z) -> range = max(range, max(abs(x - camX), abs(z - camZ)) + 0.5f) }
+        state.walls.forEach { (a, b) ->
+            listOf(a, b).forEach { (x, z) -> range = max(range, max(abs(x - camX), abs(z - camZ)) + 0.5f) }
+        }
         val pxPerMeter = size.minDimension / 2f / range
         val center = Offset(size.width / 2f, size.height / 2f)
 
@@ -62,6 +66,11 @@ fun MiniMap(state: ArUiState, modifier: Modifier = Modifier) {
             }
             drawPath(path, Color.White.copy(alpha = 0.1f))
             drawPath(path, Color.Yellow.copy(alpha = 0.8f), style = Stroke(width = 3f))
+        }
+
+        // ②-1 #5: 벽 선분 (주황 굵은 선)
+        state.walls.forEach { (a, b) ->
+            drawLine(Color(0xFFFF9800), toMap(a.first, a.second), toMap(b.first, b.second), strokeWidth = 7f)
         }
 
         // ③ 가구: 테이블 = 초록 사각형, 의자 = 하늘색 원, 소파 = 보라 긴 사각형
