@@ -7,6 +7,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.drawscope.Stroke
 import kotlin.math.abs
 import kotlin.math.ceil
 import kotlin.math.floor
@@ -17,6 +19,7 @@ import kotlin.math.max
  * - 내 위치(카메라)가 항상 가운데, 지도는 고정 (월드 x = 오른쪽, 월드 z = 아래쪽)
  * - 격자 한 칸 = 1m
  * - 확정된 가구는 진하게, 아직 관측이 적은 가구는 흐리게
+ * - #4: 바닥 외곽선(floor.polygon)을 노란 테두리로
  */
 @Composable
 fun MiniMap(state: ArUiState, modifier: Modifier = Modifier) {
@@ -27,6 +30,7 @@ fun MiniMap(state: ArUiState, modifier: Modifier = Modifier) {
         // 보여줄 범위(반지름, m): 최소 2.5m, 가구가 더 멀리 있으면 거기까지 넓힘
         var range = 2.5f
         state.mapItems.forEach { range = max(range, max(abs(it.x - camX), abs(it.z - camZ)) + 0.5f) }
+        state.floorPolygon.forEach { (x, z) -> range = max(range, max(abs(x - camX), abs(z - camZ)) + 0.5f) }
         val pxPerMeter = size.minDimension / 2f / range
         val center = Offset(size.width / 2f, size.height / 2f)
 
@@ -47,7 +51,20 @@ fun MiniMap(state: ArUiState, modifier: Modifier = Modifier) {
             drawLine(gridColor, Offset(0f, y), Offset(size.width, y))
         }
 
-        // ② 가구: 테이블 = 초록 사각형, 의자 = 하늘색 원, 소파 = 보라 긴 사각형
+        // ② #4: 바닥 외곽선 (반투명 채움 + 노란 테두리)
+        if (state.floorPolygon.size >= 3) {
+            val path = Path().apply {
+                state.floorPolygon.forEachIndexed { i, (x, z) ->
+                    val p = toMap(x, z)
+                    if (i == 0) moveTo(p.x, p.y) else lineTo(p.x, p.y)
+                }
+                close()
+            }
+            drawPath(path, Color.White.copy(alpha = 0.1f))
+            drawPath(path, Color.Yellow.copy(alpha = 0.8f), style = Stroke(width = 3f))
+        }
+
+        // ③ 가구: 테이블 = 초록 사각형, 의자 = 하늘색 원, 소파 = 보라 긴 사각형
         state.mapItems.forEach { item ->
             val p = toMap(item.x, item.z)
             val alpha = if (item.confirmed) 1f else 0.3f
@@ -65,7 +82,7 @@ fun MiniMap(state: ArUiState, modifier: Modifier = Modifier) {
             }
         }
 
-        // ③ 내 위치 + 바라보는 방향
+        // ④ 내 위치 + 바라보는 방향
         val len = max(1e-3f, kotlin.math.sqrt(state.headingX * state.headingX + state.headingZ * state.headingZ))
         val tip = Offset(
             center.x + state.headingX / len * 0.6f * pxPerMeter,
