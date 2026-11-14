@@ -1,38 +1,26 @@
 package com.jariisseo.android
 
+import kotlin.math.roundToInt
 import kotlin.math.roundToLong
 import kotlin.random.Random
 
-private const val ID_CHARS = "0123456789abcdefghijklmnopqrstuvwxyz"
-private const val TABLE_SIZE_M = 0.8f   // 아직 실측하지 않아 고정 (샘플의 기본 테이블 크기)
-
 /**
  * #7: 스캔 결과(매장 좌표) → 배치 JSON (server `docs/samples/sample-layout.json` 형식, version 3).
- * 스캔한 층 1개를 floors[]에 넣음. 확정된 테이블·의자만 (소파는 스키마에 없어 제외).
- * ID는 접두사 + 랜덤 4자리, 매장 전체에서 유일
+ * #13: 변환 규칙(확정 가구만·ID·이름)은 `layoutOf`로 옮기고 여기서는 직렬화만
  */
-fun toLayoutJson(state: ArUiState, random: Random = Random.Default): String {
-    val used = mutableSetOf<String>()
-    fun newId(prefix: String): String {
-        while (true) {
-            val id = prefix + (1..4).map { ID_CHARS[random.nextInt(ID_CHARS.length)] }.joinToString("")
-            if (used.add(id)) return id
-        }
-    }
+fun toLayoutJson(state: ArUiState, random: Random = Random.Default): String = toLayoutJson(layoutOf(state, random))
 
-    val floorId = newId("f-")
-    val confirmed = state.mapItems.filter { it.confirmed }
-    val tables = confirmed.filter { it.label == "테이블" }.mapIndexed { i, t ->
-        "{\"id\": \"${newId("t-")}\", \"name\": \"${i + 1}번\", \"x\": ${num(t.x)}, \"z\": ${num(t.z)}, " +
-            "\"width\": ${num(TABLE_SIZE_M)}, \"depth\": ${num(TABLE_SIZE_M)}, \"rotation\": 0, \"shape\": \"RECT\"}"
+/** 배치 → JSON. 층 1개를 floors[]에 넣음 */
+fun toLayoutJson(layout: Layout): String {
+    val tables = layout.tables.map { t ->
+        "{\"id\": \"${t.id}\", \"name\": \"${t.name}\", \"x\": ${num(t.x)}, \"z\": ${num(t.z)}, " +
+            "\"width\": ${num(t.width)}, \"depth\": ${num(t.depth)}, \"rotation\": ${t.rotation.roundToInt()}, \"shape\": \"${t.shape}\"}"
     }
-    val chairs = confirmed.filter { it.label == "의자" }.map { c ->
-        "{\"id\": \"${newId("c-")}\", \"x\": ${num(c.x)}, \"z\": ${num(c.z)}}"
-    }
-    val walls = state.walls.mapIndexed { i, (a, b) ->
+    val chairs = layout.chairs.map { c -> "{\"id\": \"${c.id}\", \"x\": ${num(c.x)}, \"z\": ${num(c.z)}}" }
+    val walls = layout.walls.mapIndexed { i, (a, b) ->
         "{\"id\": \"w${i + 1}\", \"from\": ${point(a)}, \"to\": ${point(b)}}"
     }
-    val polygon = state.floorPolygon.joinToString(", ", "[", "]") { point(it) }
+    val polygon = layout.floor.joinToString(", ", "[", "]") { point(it) }
 
     return """
         |{
@@ -40,7 +28,7 @@ fun toLayoutJson(state: ArUiState, random: Random = Random.Default): String {
         |  "unit": "m",
         |  "floors": [
         |    {
-        |      "id": "$floorId", "name": "1층", "order": 0,
+        |      "id": "${layout.floorId}", "name": "1층", "order": 0,
         |      "floor": { "polygon": $polygon },
         |      "walls": ${array(walls)},
         |      "tables": ${array(tables)},

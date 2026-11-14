@@ -18,9 +18,24 @@ object CornerOutline {
     const val PARALLEL_DEG = 20f    // 이웃한 두 벽이 이 안으로 나란하면 교점 대신 수선으로 이음
     const val NEAR_M = 0.3f         // #40: 외곽선 밖으로 이만큼까지는 가구로 인정 (인식 위치 오차)
 
-    /** 벽 3개 이상 → 외곽선 (직각 정리 포함). 모자라면 빈 목록 */
+    /**
+     * 벽 3개 이상 → 외곽선 (직각 정리 포함). 모자라면 빈 목록.
+     * 기록한 순서(방을 한 바퀴 돈 순서)를 먼저 쓰고, 순서가 섞였으면(마주 보는 벽을 연달아 기록 등) 꼬인 도형이 되므로
+     * 벽 점들의 중심 기준 각도 순으로 다시 정렬한 결과와 비교해 꼬이지 않고 넓은 쪽을 고름
+     */
     fun fromWalls(walls: List<WallTouch>): List<Pair<Float, Float>> {
         if (walls.size < 3) return emptyList()
+        val cx = walls.sumOf { it.x.toDouble() } / walls.size
+        val cz = walls.sumOf { it.z.toDouble() } / walls.size
+        val byAngle = walls.sortedBy { atan2(it.z - cz, it.x - cx) }
+        return listOf(build(walls), build(byAngle))
+            .filterNot(::selfIntersects)
+            .maxByOrNull { FloorPolygon.area(it) }
+            ?: build(walls)
+    }
+
+    /** 주어진 순서대로 이웃한 벽 선의 교점 = 모서리 */
+    private fun build(walls: List<WallTouch>): List<Pair<Float, Float>> {
         val corners = mutableListOf<Pair<Float, Float>>()
         for (i in walls.indices) {
             val a = walls[i]
@@ -35,6 +50,29 @@ object CornerOutline {
             }
         }
         return square(corners)
+    }
+
+    /** 다각형의 이웃하지 않은 두 변이 서로 교차하는지 (꼬인 도형) */
+    private fun selfIntersects(poly: List<Pair<Float, Float>>): Boolean {
+        val n = poly.size
+        if (n < 4) return false
+        fun cross(o: Pair<Float, Float>, a: Pair<Float, Float>, b: Pair<Float, Float>) =
+            (a.first - o.first) * (b.second - o.second) - (a.second - o.second) * (b.first - o.first)
+        for (i in 0 until n) {
+            val a1 = poly[i]
+            val a2 = poly[(i + 1) % n]
+            for (j in i + 2 until n) {
+                if (i == 0 && j == n - 1) continue   // 첫 변과 마지막 변은 이웃
+                val b1 = poly[j]
+                val b2 = poly[(j + 1) % n]
+                val d1 = cross(b1, b2, a1)
+                val d2 = cross(b1, b2, a2)
+                val d3 = cross(a1, a2, b1)
+                val d4 = cross(a1, a2, b2)
+                if (((d1 > 0 && d2 < 0) || (d1 < 0 && d2 > 0)) && ((d3 > 0 && d4 < 0) || (d3 < 0 && d4 > 0))) return true
+            }
+        }
+        return false
     }
 
     /** 벽 선 위 ±half 길이의 선분 (미니맵 표시용) */

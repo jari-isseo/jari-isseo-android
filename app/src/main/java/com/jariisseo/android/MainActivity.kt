@@ -32,6 +32,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.OutlinedButton
@@ -41,6 +42,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -51,6 +53,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.graphics.toArgb
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -65,6 +68,7 @@ import com.jariisseo.android.ui.BigNumber
 import com.jariisseo.android.ui.CircleButton
 import com.jariisseo.android.ui.Glyph
 import com.jariisseo.android.ui.theme.Brown
+import com.jariisseo.android.ui.theme.Danger
 import com.jariisseo.android.ui.theme.Ink
 import com.jariisseo.android.ui.theme.JariIsseoTheme
 import com.jariisseo.android.ui.theme.Sage
@@ -79,6 +83,7 @@ class MainActivity : ComponentActivity() {
     // ★ 글자 하나(statusText) 대신 화면 상태 전체를 들고 있음
     private var uiState by mutableStateOf(ArUiState())
     private var modelInfo by mutableStateOf("모델 로딩 중...")   // ★ 8교시
+    private var editLayout by mutableStateOf<Layout?>(null)    // #13: 보정 중인 배치 ([스캔 완료] 때 새로 만듦)
 
     private var session: Session? = null          // ARCore 엔진. 처음엔 없음(null)
     private var installRequested = false          // AR 서비스 설치 화면을 이미 띄웠는지
@@ -131,7 +136,17 @@ class MainActivity : ComponentActivity() {
         // #10: 로그인 → 홈 → 스캔 → 보정 → 뷰 (스캔 화면만 여기서 그림)
         setContent {
             JariIsseoTheme {
-                AppNav(scanContent = { onClose, onDone -> ScanScreen(onClose, onDone) })
+                AppNav(
+                    scanContent = { onClose, onDone ->
+                        // #13: [스캔 완료] = 지금 스캔 결과로 보정할 배치를 새로 만들고 보정 화면으로 (이전 보정 내용은 덮어씀)
+                        ScanScreen(onClose) {
+                            editLayout = layoutOf(uiState)
+                            onDone()
+                        }
+                    },
+                    layout = editLayout,
+                    onLayoutChange = { editLayout = it },
+                )
             }
         }
 
@@ -234,6 +249,13 @@ class MainActivity : ComponentActivity() {
                 .fillMaxWidth()
                 .clip(RoundedCornerShape(28.dp))
                 .background(Color(0xC71C1714))
+                // 패널 빈 곳을 누른 터치가 뒤의 카메라(탭 = 점 찍기)로 새지 않게: 패널이 터치를 받는 대상이 되기만 하면
+                // 뒤의 형제(카메라 뷰)에는 전달되지 않음. consume()은 하지 않음 → 하면 버튼이 클릭을 취소함
+                .pointerInput(Unit) {
+                    awaitPointerEventScope {
+                        while (true) awaitPointerEvent()
+                    }
+                }
                 .padding(start = 18.dp, end = 14.dp, top = 14.dp, bottom = 10.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
@@ -267,14 +289,35 @@ class MainActivity : ComponentActivity() {
             }
 
             // 보조 동작 (작은 글자)
+            // 1단계: [처음부터] = 기록한 벽만 다시 (가구는 아직 없음)
+            // 2단계: [스캔 처음부터] = 벽·가구·AR 기준 모두 지움 → 실수 방지로 확인 창
+            var confirmReset by remember { mutableStateOf(false) }
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Center) {
                 if (wallStep) {
                     SmallAction("되돌리기") { renderer.outlineOp(OutlineOp.UNDO) }
                     SmallAction("처음부터") { renderer.outlineOp(OutlineOp.RESET) }
                 } else {
-                    SmallAction("JSON 내보내기") { exportLayout() }
+                    // #7 검증용: 보정 전 스캔 원본을 내보냄 (보정한 배치는 #15 업로드에서 [저장]으로)
+                    SmallAction("스캔 원본 JSON") { exportLayout() }
+                    SmallAction("스캔 처음부터") { confirmReset = true }
                 }
-                SmallAction("모두 지우기") { renderer.clear() }
+            }
+            if (confirmReset) {
+                AlertDialog(
+                    onDismissRequest = { confirmReset = false },
+                    title = { Text("스캔을 처음부터 할까요?") },
+                    text = { Text("기록한 벽과 찾은 테이블·의자가 모두 지워져요.") },
+                    confirmButton = {
+                        TextButton(onClick = {
+                            renderer.clear()
+                            confirmReset = false
+                        }) { Text("지우기", color = Danger, fontWeight = FontWeight.Bold) }
+                    },
+                    dismissButton = {
+                        TextButton(onClick = { confirmReset = false }) { Text("취소", color = Ink) }
+                    },
+                    containerColor = Color.White,
+                )
             }
         }
     }
