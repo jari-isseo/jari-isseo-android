@@ -60,17 +60,17 @@ class LayoutRepositoryTest {
         assertEquals(listOf("t-1111"), layout.tables.map { it.id })
     }
 
-    @Test
-    fun prepareAndSave_putsAllFloors() = runTest {
-        server.enqueue(json(200, serverJson))   // prepare: 최신 서버 배치
-        server.enqueue(json(200, serverJson))   // save 응답
-        val edited = Layout(
-            "f-aaaa", listOf(0f to 0f, 4f to 0f, 4f to 3f), emptyList(),
-            listOf(TableItem("t-1111", "1번", 2f, 1f)), emptyList(),
-        )
+    private val edited = Layout(
+        "f-aaaa", listOf(0f to 0f, 4f to 0f, 4f to 3f), emptyList(),
+        listOf(TableItem("t-1111", "1번", 2f, 1f)), emptyList(),
+    )
 
-        val pending = repo.prepare(edited)
-        repo.save(pending, edited.floorId)
+    @Test
+    fun save_putsAllFloors() = runTest {
+        server.enqueue(json(200, serverJson))   // 저장 직전 최신 서버 배치
+        server.enqueue(json(200, serverJson))   // PUT 응답
+
+        repo.save(edited)
 
         server.takeRequest()   // GET
         val put = server.takeRequest()
@@ -82,12 +82,28 @@ class LayoutRepositoryTest {
     }
 
     @Test
+    fun save_refetchesBeforePut_keepsOtherFloorChangedMeanwhile() = runTest {
+        // 확인 창이 떠 있는 동안 다른 층(f-bbbb)에 테이블 t-8888이 추가됨
+        server.enqueue(json(200, serverJson))                                        // resetsStatus 확인
+        server.enqueue(json(200, serverJson.replace("\"t-9999\"", "\"t-8888\"")))   // save 직전 GET
+        server.enqueue(json(200, serverJson))                                        // PUT 응답
+
+        repo.resetsStatus(edited)
+        repo.save(edited)
+
+        server.takeRequest()
+        server.takeRequest()
+        val body = server.takeRequest().body.readUtf8()
+        assertTrue(body.contains("\"t-8888\"") && !body.contains("\"t-9999\""))
+    }
+
+    @Test
     fun save_invalidLayout_throwsServerMessage() = runTest {
+        server.enqueue(json(404, """{"code":"LAYOUT_NOT_FOUND","message":"아직 저장된 배치가 없어요"}"""))
         server.enqueue(json(400, """{"code":"INVALID_LAYOUT","message":"1층: 테이블 이름은 1~20자여야 해요"}"""))
-        val pending = withFloor(null, Layout("f-aaaa", emptyList(), emptyList(), emptyList(), emptyList()))
 
         try {
-            repo.save(pending, "f-aaaa")
+            repo.save(Layout("f-aaaa", emptyList(), emptyList(), emptyList(), emptyList()))
             fail()
         } catch (e: ApiException) {
             assertEquals("INVALID_LAYOUT", e.code)
