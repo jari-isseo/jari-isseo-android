@@ -13,8 +13,11 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
+import android.app.Activity
+import android.view.WindowManager
 import android.widget.Toast
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableIntStateOf
@@ -67,6 +70,7 @@ private const val READY_TIMEOUT_MS = 10_000L
  * #17: 배치도 = 손님 웹과 같은 페이지를 WebView 사장님 모드로 (내 매장 publicId → /s/{publicId}?mode=owner).
  *   웹이 다 그리면 OwnerBridge.onReady로 로딩 덮개를 걷음. 못 불러오면 에러 + [다시 시도]
  * #18: 테이블 탭 → PUT 상태 전환 → 성공 applyStatus / 실패 revertStatus + 토스트
+ * #19: 카운터 태블릿용 — 화면 꺼짐 방지, 가로 화면 가능
  */
 @Composable
 fun ViewScreen(onBack: () -> Unit) {
@@ -79,6 +83,13 @@ fun ViewScreen(onBack: () -> Unit) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val pending = remember { mutableSetOf<String>() }                // #18: 상태 전환 요청 중인 테이블
+
+    // #19: 뷰에 있는 동안 화면 꺼짐 방지 (나가면 해제)
+    DisposableEffect(Unit) {
+        val window = (context as? Activity)?.window
+        window?.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        onDispose { window?.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON) }
+    }
     fun fail(text: String) {
         state = ViewerState.ERROR
         errorText = text
