@@ -50,7 +50,8 @@ fun SignupScreen(onSignedUp: () -> Unit, onBack: () -> Unit) {
 
     val canSubmit = !loading && id.isNotBlank() && password.isNotEmpty() && storeName.isNotBlank()
     fun submit() {
-        if (!canSubmit) return
+        // canSubmit은 그린 시점 값이라, 다시 그리기 전에 두 번 눌리면 둘 다 통과 → loading은 지금 값으로 확인
+        if (loading || !canSubmit) return
         loading = true
         error = null
         scope.launch {
