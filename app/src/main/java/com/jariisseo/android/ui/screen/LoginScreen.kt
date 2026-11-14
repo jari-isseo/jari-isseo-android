@@ -3,15 +3,19 @@ package com.jariisseo.android.ui.screen
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Text
@@ -51,32 +55,41 @@ fun LoginScreen(onLogin: () -> Unit) {
     var id by remember { mutableStateOf("") }
     var password by remember { mutableStateOf("") }
 
-    Column(Modifier.fillMaxSize().background(Bg).padding(horizontal = 24.dp)) {
-        Spacer(Modifier.height(88.dp))
-        Box(Modifier.size(56.dp).clip(RoundedCornerShape(18.dp)).background(Sage), contentAlignment = Alignment.Center) {
-            LineIcon(Glyph.TABLE, SageInk, size = 30.dp)
-        }
-        Spacer(Modifier.height(24.dp))
-        Text("사장님,\n반가워요", fontSize = 34.sp, fontWeight = FontWeight.Black, lineHeight = 42.sp)
-        Spacer(Modifier.height(10.dp))
-        Text("매장 빈자리를 손님에게 바로 알려드려요", fontSize = 15.sp, color = Sub)
-        Spacer(Modifier.height(36.dp))
+    // 화면이 짧으면(멀티 윈도우·키보드) 스크롤, 길면 버튼이 맨 아래에 붙도록 최소 높이 = 화면 높이
+    BoxWithConstraints(Modifier.fillMaxSize().background(Bg)) {
+        Column(
+            Modifier
+                .fillMaxWidth()
+                .verticalScroll(rememberScrollState())
+                .heightIn(min = maxHeight)
+                .padding(horizontal = 24.dp),
+        ) {
+            Spacer(Modifier.height(88.dp))
+            Box(Modifier.size(56.dp).clip(RoundedCornerShape(18.dp)).background(Sage), contentAlignment = Alignment.Center) {
+                LineIcon(Glyph.TABLE, SageInk, size = 30.dp)
+            }
+            Spacer(Modifier.height(24.dp))
+            Text("사장님,\n반가워요", fontSize = 34.sp, fontWeight = FontWeight.Black, lineHeight = 42.sp)
+            Spacer(Modifier.height(10.dp))
+            Text("매장 빈자리를 손님에게 바로 알려드려요", fontSize = 15.sp, color = Sub)
+            Spacer(Modifier.height(36.dp))
 
-        Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
-            Field("아이디", id, { id = it })
-            Field("비밀번호", password, { password = it }, placeholder = "8자 이상", secret = true)
-        }
+            Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                Field("아이디", id, { id = it })
+                Field("비밀번호", password, { password = it }, placeholder = "8자 이상", secret = true)
+            }
 
-        Spacer(Modifier.weight(1f))
-        PrimaryButton("로그인", onLogin, Modifier.fillMaxWidth())
-        TextButton(onClick = {}, modifier = Modifier.align(Alignment.CenterHorizontally).padding(top = 8.dp, bottom = 20.dp)) {
-            Text(
-                buildAnnotatedString {
-                    withStyle(SpanStyle(color = Sub)) { append("처음이신가요? ") }
-                    withStyle(SpanStyle(color = Ink, fontWeight = FontWeight.Bold, textDecoration = TextDecoration.Underline)) { append("가입하기") }
-                },
-                fontSize = 15.sp,
-            )
+            Spacer(Modifier.weight(1f))
+            PrimaryButton("로그인", onLogin, Modifier.fillMaxWidth().padding(top = 24.dp))
+            TextButton(onClick = {}, modifier = Modifier.align(Alignment.CenterHorizontally).padding(top = 8.dp, bottom = 20.dp)) {
+                Text(
+                    buildAnnotatedString {
+                        withStyle(SpanStyle(color = Sub)) { append("처음이신가요? ") }
+                        withStyle(SpanStyle(color = Ink, fontWeight = FontWeight.Bold, textDecoration = TextDecoration.Underline)) { append("가입하기") }
+                    },
+                    fontSize = 15.sp,
+                )
+            }
         }
     }
 }

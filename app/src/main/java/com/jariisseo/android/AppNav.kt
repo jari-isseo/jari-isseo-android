@@ -35,7 +35,8 @@ fun AppNav(scanContent: @Composable (onClose: () -> Unit, onDone: () -> Unit) ->
             HomeScreen(
                 onView = { nav.navigate(Route.VIEW) },
                 onEdit = { nav.navigate(Route.EDIT) },
-                onScan = { nav.navigate(Route.SCAN) },
+                // 빠르게 두 번 눌러도 스캔이 쌓이지 않게 (두 스캔 화면이 같은 glView를 붙이면 크래시)
+                onScan = { nav.navigate(Route.SCAN) { launchSingleTop = true } },
             )
         }
         composable(Route.SCAN) {
