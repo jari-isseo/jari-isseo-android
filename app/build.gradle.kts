@@ -63,4 +63,5 @@ dependencies {
 
     implementation(libs.arcore)
     implementation(libs.litert)
+    implementation(libs.androidx.navigation.compose)   // #10: 화면 이동
 }
