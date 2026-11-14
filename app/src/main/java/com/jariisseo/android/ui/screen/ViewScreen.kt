@@ -131,7 +131,8 @@ fun ViewScreen(onBack: () -> Unit) {
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Column(Modifier.weight(1f)) {
-                Text("1층 빈자리", color = SageInk, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                // 숫자는 웹에 지금 보이는 층 기준 (웹이 마지막으로 본 층을 기억) → 층 번호를 붙이지 않음 (층 이름은 #25)
+                Text("빈자리", color = SageInk, fontSize = 13.sp, fontWeight = FontWeight.Bold)
                 val s = summary
                 BigNumber(s?.first?.toString() ?: "-", total = s?.second?.toString(), color = SageInk, size = 36)
             }
