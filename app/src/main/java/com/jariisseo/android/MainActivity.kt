@@ -53,6 +53,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.graphics.toArgb
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -248,6 +249,13 @@ class MainActivity : ComponentActivity() {
                 .fillMaxWidth()
                 .clip(RoundedCornerShape(28.dp))
                 .background(Color(0xC71C1714))
+                // 패널 빈 곳을 누른 터치가 뒤의 카메라(탭 = 점 찍기)로 새지 않게: 패널이 터치를 받는 대상이 되기만 하면
+                // 뒤의 형제(카메라 뷰)에는 전달되지 않음. consume()은 하지 않음 → 하면 버튼이 클릭을 취소함
+                .pointerInput(Unit) {
+                    awaitPointerEventScope {
+                        while (true) awaitPointerEvent()
+                    }
+                }
                 .padding(start = 18.dp, end = 14.dp, top = 14.dp, bottom = 10.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
@@ -289,7 +297,8 @@ class MainActivity : ComponentActivity() {
                     SmallAction("되돌리기") { renderer.outlineOp(OutlineOp.UNDO) }
                     SmallAction("처음부터") { renderer.outlineOp(OutlineOp.RESET) }
                 } else {
-                    SmallAction("JSON 내보내기") { exportLayout() }
+                    // #7 검증용: 보정 전 스캔 원본을 내보냄 (보정한 배치는 #15 업로드에서 [저장]으로)
+                    SmallAction("스캔 원본 JSON") { exportLayout() }
                     SmallAction("스캔 처음부터") { confirmReset = true }
                 }
             }

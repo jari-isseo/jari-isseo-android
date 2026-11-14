@@ -58,6 +58,22 @@ class CornerOutlineTest {
     }
 
     @Test
+    fun outOfOrderWalls_stillMakeRoom() {
+        // 실기기 로그(11-14 19:21): 왼쪽 → 앞 → 뒤 → 오른쪽 순서로 기록 (앞·뒤 벽이 연달아 옴)
+        val walls = listOf(
+            WallTouch(-3.30f, 1.32f, -0.95f, 0.30f),
+            WallTouch(-2.05f, 1.99f, 0.36f, 0.93f),
+            WallTouch(-2.72f, -0.36f, -0.36f, -0.93f),
+            WallTouch(-0.12f, 0.01f, -0.99f, 0.08f),
+        )
+        val out = CornerOutline.fromWalls(walls)
+
+        assertEquals(4, out.size)
+        // 정렬 전 순서로는 꼬인 도형이라 넓이가 거의 0. 다시 정렬하면 약 3.2m × 2.3m 방
+        assertTrue("넓이 ${FloorPolygon.area(out)}", FloorPolygon.area(out) > 4f)
+    }
+
+    @Test
     fun parallelNeighbours_joinedByPerpendicular() {
         // 짧은 단차 벽을 건너뛰고 나란한 두 벽(z=4, z=3.5)을 연달아 기록
         val walls = listOf(
