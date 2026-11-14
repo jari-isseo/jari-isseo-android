@@ -48,6 +48,7 @@ import com.jariisseo.android.ui.theme.Bg
 import com.jariisseo.android.ui.theme.Danger
 import com.jariisseo.android.ui.theme.Sub
 import kotlinx.coroutines.launch
+import java.io.IOException
 
 /**
  * #42: 가게 정보 (홈 하단 메뉴 [가게 정보]). 매장 이름 확인·수정, 아이디 표시, 로그아웃.
@@ -80,14 +81,17 @@ fun StoreScreen(onBack: () -> Unit, onLoggedOut: () -> Unit) {
     fun save() {
         if (saving || !canSave) return
         saving = true
+        // 응답 전에 또 고쳐 쓴 이름은 덮어쓰지 않음 (보낸 그대로일 때만 결과로 바꾸거나 되돌림)
+        val submitted = name
         scope.launch {
             try {
-                val res = apiCall { Server.api.updateStore(UpdateStoreRequest(name.trim())) }
+                val res = apiCall { Server.api.updateStore(UpdateStoreRequest(submitted.trim())) }
                 saved = res.name
-                name = res.name
+                if (name == submitted) name = res.name
                 Toast.makeText(context, "매장 이름을 바꿨어요", Toast.LENGTH_SHORT).show()
             } catch (e: ApiException) {
-                saved?.let { name = it }
+                val last = saved
+                if (name == submitted && last != null) name = last
                 Toast.makeText(context, e.displayMessage(), Toast.LENGTH_SHORT).show()
             } finally {
                 saving = false
@@ -131,7 +135,18 @@ fun StoreScreen(onBack: () -> Unit, onLoggedOut: () -> Unit) {
             Box(Modifier.padding(start = 24.dp, end = 24.dp, top = 24.dp, bottom = 32.dp)) {
                 OutlineButton(
                     "로그아웃",
-                    { scope.launch { Server.tokens.delete(); onLoggedOut() } },
+                    {
+                        scope.launch {
+                            // 저장소 쓰기 실패 → 토큰이 남아 있으므로 화면에 그대로 (앱이 꺼지지 않게)
+                            try {
+                                Server.tokens.delete()
+                            } catch (_: IOException) {
+                                Toast.makeText(context, "로그아웃하지 못했어요. 다시 시도해 주세요", Toast.LENGTH_SHORT).show()
+                                return@launch
+                            }
+                            onLoggedOut()
+                        }
+                    },
                     Modifier.fillMaxWidth(),
                 )
             }

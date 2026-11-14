@@ -47,12 +47,17 @@ fun AppNav(
     scanContent: @Composable (onClose: () -> Unit, onDone: () -> Unit) -> Unit,
     layout: Layout?,
     onLayoutChange: (Layout) -> Unit,
+    onSessionEnd: () -> Unit,
 ) {
     val nav = rememberNavController()
-    // 로그인으로 (뒤로 가기 기록을 모두 비움): 401 또는 #42 로그아웃
-    fun toLogin() = nav.navigate(Route.LOGIN) {
-        popUpTo(nav.graph.id) { inclusive = true }
-        launchSingleTop = true
+    // 로그인으로 (뒤로 가기 기록을 모두 비움): 401 또는 #42 로그아웃.
+    // 이전 계정의 스캔·보정 배치를 지움 → 다른 계정으로 로그인해 저장해도 덮어쓰지 않음
+    fun toLogin() {
+        onSessionEnd()
+        nav.navigate(Route.LOGIN) {
+            popUpTo(nav.graph.id) { inclusive = true }
+            launchSingleTop = true
+        }
     }
     LaunchedEffect(nav) {
         Server.loggedOut.collect { toLogin() }

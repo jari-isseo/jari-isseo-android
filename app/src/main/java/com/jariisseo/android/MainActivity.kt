@@ -155,6 +155,11 @@ class MainActivity : ComponentActivity() {
                     },
                     layout = editLayout,
                     onLayoutChange = { editLayout = it },
+                    // #42: 로그아웃·401 → 보정 중인 배치와 스캔 기록(벽·가구) 모두 지움
+                    onSessionEnd = {
+                        editLayout = null
+                        renderer.clear()
+                    },
                 )
             }
         }
