@@ -41,4 +41,10 @@ class OwnerBridgeTest {
         assertEquals("window.revertStatus(\"t-3f9a\")", revertStatusJs("t-3f9a"))
         assertEquals("window.revertStatus(\"a'b\\\"c\\\\\")", revertStatusJs("a'b\"c\\"))
     }
+
+    @Test
+    fun applyStatusJs_escapesTableId() {
+        assertEquals("window.applyStatus(\"t-3f9a\", true)", applyStatusJs("t-3f9a", true))
+        assertEquals("window.applyStatus(\"a'b\\\"c\\\\\", false)", applyStatusJs("a'b\"c\\", false))
+    }
 }

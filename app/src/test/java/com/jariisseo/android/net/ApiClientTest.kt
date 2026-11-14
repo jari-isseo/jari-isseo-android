@@ -58,6 +58,34 @@ class ApiClientTest {
     }
 
     @Test
+    fun changeStatus_putsOccupied_andParsesResponse() = runTest {
+        server.enqueue(json(200, """{"tableId":"t-3f9a","occupied":true,"source":"MANUAL","updatedAt":"2026-11-12T11:30:00Z"}"""))
+
+        val res = apiCall { api.changeStatus("t-3f9a", UpdateStatusRequest(true)) }
+
+        assertEquals(TableStatusResponse("t-3f9a", true), res)
+        val req = server.takeRequest()
+        assertEquals("PUT", req.method)
+        assertEquals("/api/owner/tables/t-3f9a/status", req.path)
+        assertEquals("""{"occupied":true}""", req.body.readUtf8())
+        assertEquals("Bearer tok-123", req.getHeader("Authorization"))
+    }
+
+    @Test
+    fun changeStatus_404_isTableNotFound() = runTest {
+        server.enqueue(json(404, """{"code":"TABLE_NOT_FOUND","message":"테이블을 찾을 수 없어요"}"""))
+
+        try {
+            apiCall { api.changeStatus("t-none", UpdateStatusRequest(false)) }
+            fail()
+        } catch (e: ApiException) {
+            assertEquals(404, e.status)
+            assertEquals("TABLE_NOT_FOUND", e.code)
+        }
+        assertEquals(0, loggedOut)
+    }
+
+    @Test
     fun authApi_hasNoToken() = runTest {
         server.enqueue(json(200, """{"accessToken":"new","expiresIn":2592000}"""))
 
