@@ -1,0 +1,24 @@
+package com.jariisseo.android.net
+
+/**
+ * #12: 가입·로그인. 성공하면 받은 토큰을 저장 (가입도 응답 토큰으로 바로 로그인 상태).
+ * 실패는 ApiException 그대로 (토큰 저장 안 함)
+ */
+class AuthRepository(private val api: JariApi, private val saveToken: suspend (String) -> Unit) {
+    suspend fun login(loginId: String, password: String) {
+        val res = apiCall { api.login(LoginRequest(loginId.trim(), password)) }
+        saveToken(res.accessToken)
+    }
+
+    suspend fun signup(loginId: String, password: String, storeName: String) {
+        val res = apiCall { api.signup(SignupRequest(loginId.trim(), password, storeName)) }
+        saveToken(res.accessToken)
+    }
+}
+
+/**
+ * 화면에 보여줄 문구. 서버 검증 에러는 "loginId: 아이디는 …"처럼 필드 이름이 앞에 붙어 와서 그 부분만 뗌.
+ * 나머지는 서버 message 그대로
+ */
+fun ApiException.displayMessage(): String =
+    if (code == "INVALID_REQUEST" && ": " in message) message.substringAfter(": ") else message
