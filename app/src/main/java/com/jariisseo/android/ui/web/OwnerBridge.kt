@@ -32,3 +32,7 @@ class OwnerBridge(
 
 /** 앱 → 웹: 상태를 바꾸지 않고 흐림만 풀기. tableId는 JSON 문자열로 넣어 따옴표·특수문자를 이스케이프 */
 fun revertStatusJs(tableId: String): String = "window.revertStatus(${JsonPrimitive(tableId)})"
+
+/** #18 앱 → 웹: API 성공 → 서버가 확정한 상태로 반영 */
+fun applyStatusJs(tableId: String, occupied: Boolean): String =
+    "window.applyStatus(${JsonPrimitive(tableId)}, $occupied)"
