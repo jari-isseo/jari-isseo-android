@@ -22,6 +22,14 @@ class TopViewTransformTest {
     }
 
     @Test
+    fun fit_tinyArea_keepsScalePositive() {
+        // 높이 40px < 여백 28px × 2: 여백을 줄여서라도 배율은 양수
+        val t = TopViewTransform.fit(listOf(0f to 0f, 8f to 6f), 400f, 40f, 28f)
+
+        assertTrue("scale ${t.scale}", t.scale > 0f)
+    }
+
+    @Test
     fun toStore_isInverseOfToScreen() {
         val t = TopViewTransform(57f, 13f, -4f)
         val p = t.toScreen(2.5f, 1.25f)

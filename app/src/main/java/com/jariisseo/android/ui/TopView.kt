@@ -6,7 +6,6 @@ import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.calculateCentroid
 import androidx.compose.foundation.gestures.calculatePan
 import androidx.compose.foundation.gestures.calculateZoom
-import androidx.compose.foundation.gestures.drag
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -75,7 +74,9 @@ data class TopViewTransform(val scale: Float, val offsetX: Float, val offsetY: F
             val maxZ = points.maxOf { it.second }
             val bw = (maxX - minX).coerceAtLeast(0.5f)
             val bh = (maxZ - minZ).coerceAtLeast(0.5f)
-            val s = minOf((width - 2 * padding) / bw, (height - 2 * padding) / bh)
+            // 영역이 작으면(화면 분할 등) 여백을 줄여서 배율이 항상 양수가 되게 (음수면 확대 범위가 뒤집혀 크래시)
+            val pad = minOf(padding, width / 4, height / 4)
+            val s = minOf((width - 2 * pad) / bw, (height - 2 * pad) / bh)
             return TopViewTransform(s, width / 2 - (minX + maxX) / 2 * s, height / 2 - (minZ + maxZ) / 2 * s)
         }
     }
@@ -103,7 +104,7 @@ fun TopView(layout: Layout, onChange: (Layout) -> Unit, modifier: Modifier = Mod
 
     // 처음·화면 크기가 바뀔 때·새 스캔(floorId)일 때 배치 전체가 보이게 맞춤
     LaunchedEffect(size, layout.floorId) {
-        if (size.width == 0) return@LaunchedEffect
+        if (size.width == 0 || size.height == 0) return@LaunchedEffect
         val fit = TopViewTransform.fit(layout.points(), size.width.toFloat(), size.height.toFloat(), padding)
         transform = fit
         baseScale = fit.scale
@@ -118,33 +119,32 @@ fun TopView(layout: Layout, onChange: (Layout) -> Unit, modifier: Modifier = Mod
                     val t0 = transform ?: return@awaitEachGesture
                     val (sx, sz) = t0.toStore(down.position.x, down.position.y)
                     val hit = if (movable) hitTable(current, sx, sz, slop = 12.dp.toPx() / t0.scale) else null
-                    if (hit != null) {
-                        // 테이블 드래그: 잡은 지점과 테이블 중심의 차이를 유지
-                        selected = hit.id
-                        val grabX = hit.x - sx
-                        val grabZ = hit.z - sz
-                        drag(down.id) { c ->
-                            val t = transform ?: return@drag
-                            val (x, z) = t.toStore(c.position.x, c.position.y)
-                            change(moveTable(current, hit.id, x + grabX, z + grabZ))
-                            c.consume()
-                        }
-                    } else {
-                        // 빈 곳: 한 손가락 이동, 두 손가락 확대·축소
-                        selected = null
-                        do {
-                            val event = awaitPointerEvent()
-                            val pan = event.calculatePan()
-                            val zoom = event.calculateZoom()
-                            val centroid = event.calculateCentroid()
-                            val t = transform
-                            if (t != null && centroid != Offset.Unspecified) {
-                                transform = t.panned(pan.x, pan.y)
-                                    .zoomed(zoom, centroid.x, centroid.y, baseScale * MIN_ZOOM, baseScale * MAX_ZOOM)
+                    selected = hit?.id
+                    // 테이블 위에서 시작 = 테이블 드래그 (잡은 지점과 테이블 중심의 차이 유지)
+                    // 빈 곳에서 시작하거나 드래그 중 두 번째 손가락이 닿으면 = 화면 이동·확대·축소
+                    var dragging = hit != null
+                    val grabX = (hit?.x ?: 0f) - sx
+                    val grabZ = (hit?.z ?: 0f) - sz
+                    do {
+                        val event = awaitPointerEvent()
+                        if (dragging && event.changes.count { it.pressed } > 1) dragging = false
+                        val t = transform
+                        if (dragging && hit != null) {
+                            val c = event.changes.firstOrNull { it.id == down.id && it.pressed }
+                            if (c != null && t != null) {
+                                val (x, z) = t.toStore(c.position.x, c.position.y)
+                                change(moveTable(current, hit.id, x + grabX, z + grabZ))
                             }
-                            event.changes.forEach { if (it.positionChanged()) it.consume() }
-                        } while (event.changes.any { it.pressed })
-                    }
+                        } else if (t != null) {
+                            val centroid = event.calculateCentroid()
+                            if (centroid != Offset.Unspecified) {
+                                val pan = event.calculatePan()
+                                transform = t.panned(pan.x, pan.y)
+                                    .zoomed(event.calculateZoom(), centroid.x, centroid.y, baseScale * MIN_ZOOM, baseScale * MAX_ZOOM)
+                            }
+                        }
+                        event.changes.forEach { if (it.positionChanged()) it.consume() }
+                    } while (event.changes.any { it.pressed })
                 }
             },
     ) {
