@@ -152,7 +152,16 @@ class ArRenderer(
     // 추적을 놓칠 수 있어 앵커를 새로 만들지 않고, 직전 추적 pose도 씀
     private val pendingOutlineOps = ConcurrentLinkedQueue<OutlineOp>()
     private val wallTouchesLocal = mutableListOf<WallTouch>()   // GL 스레드에서만 다룸
+    // #40: 단계(외곽선 완료 여부)가 바뀔 때마다 +1. 이전 단계에서 시작한 인식 결과는 버림 (GL 스레드만 씀)
+    @Volatile private var stage = 0
     private var outlineClosed = false
+        set(value) {
+            if (field != value) {
+                stage++
+                latestDetections = emptyList()   // 이전 단계의 박스가 남아 투영되지 않게
+            }
+            field = value
+        }
     // 카메라·기준 앵커가 둘 다 추적 중일 때의 "기준 앵커 기준 카메라 pose" (추적을 놓친 프레임의 pose는 섞지 않음)
     private var lastLocalCameraPose: Pose? = null
     private var lastTrackedNs = 0L
@@ -351,12 +360,15 @@ class ArRenderer(
             return
         }
         lastDetectTimestamp = frame.timestamp
+        val startStage = stage
 
         detectExecutor.execute {
             try {
-                latestDetections = detector.detect(yuv)
+                val result = detector.detect(yuv)
+                if (startStage != stage) return@execute   // #40: 추론 중 단계가 바뀜 ([벽 다시] 등) → 버림
+                latestDetections = result
                 detectionGeneration++      // GL 스레드에 "새 결과 있음" 알림 (이 스레드만 씀)
-                detectInfo = "추론 ${detector.lastInferenceMs}ms · 물체 ${latestDetections.size}개 · 좌표 ${detector.coordMode}"
+                detectInfo = "추론 ${detector.lastInferenceMs}ms · 물체 ${result.size}개 · 좌표 ${detector.coordMode}"
             } catch (e: Exception) {
                 detectInfo = "인식 오류: ${e.javaClass.simpleName} ${e.message}"
             } finally {
@@ -373,6 +385,8 @@ class ArRenderer(
         val generation = detectionGeneration
         if (generation == processedGeneration) return   // 이미 처리한 결과
         processedGeneration = generation
+        // #40: 외곽선 밖 관측은 병합 전에 버림 (안쪽 가구와 합쳐져 평균이 바깥으로 끌려가지 않게)
+        val outline = CornerOutline.fromWalls(wallTouchesWorld())
 
         for (d in latestDetections) {
             val box = toView(frame, d)
@@ -387,6 +401,7 @@ class ArRenderer(
                 .minByOrNull { it.hitPose.ty() }   // 수평면이 여러 개면(테이블 윗면 등) 가장 낮은 것 = 바닥
                 ?: continue                        // 바닥을 아직 못 찾은 곳
             val center = estimateCenter(frame.camera.pose, hit.hitPose, HALF_DEPTH_M.getValue(d.label))
+            if (!CornerOutline.near(outline, center.tx() to center.tz())) continue
             addOrMerge(d.label, hit.trackable as Plane, center, hit.hitPose)
         }
     }
