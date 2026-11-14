@@ -13,7 +13,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
-import android.util.Log
+import android.widget.Toast
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.key
@@ -21,11 +21,13 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
@@ -36,6 +38,7 @@ import androidx.compose.ui.unit.sp
 import com.jariisseo.android.BuildConfig
 import com.jariisseo.android.net.ApiException
 import com.jariisseo.android.net.Server
+import com.jariisseo.android.net.UpdateStatusRequest
 import com.jariisseo.android.net.apiCall
 import com.jariisseo.android.net.displayMessage
 import com.jariisseo.android.net.ownerViewerUrl
@@ -50,17 +53,20 @@ import com.jariisseo.android.ui.theme.Sage
 import com.jariisseo.android.ui.theme.SageInk
 import com.jariisseo.android.ui.theme.Sub
 import com.jariisseo.android.ui.web.OwnerWebView
+import com.jariisseo.android.ui.web.applyStatusJs
 import com.jariisseo.android.ui.web.revertStatusJs
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 
 private enum class ViewerState { LOADING, READY, ERROR }
 
 private const val READY_TIMEOUT_MS = 10_000L
 
 /**
- * #10: 시안 D ⑦ 사장님 뷰. 테이블 탭 전환은 #18, 영업 중/마감·전체 비우기는 #23, 층 탭은 #25.
+ * #10: 시안 D ⑦ 사장님 뷰. 영업 중/마감·전체 비우기는 #23, 층 탭은 #25.
  * #17: 배치도 = 손님 웹과 같은 페이지를 WebView 사장님 모드로 (내 매장 publicId → /s/{publicId}?mode=owner).
  *   웹이 다 그리면 OwnerBridge.onReady로 로딩 덮개를 걷음. 못 불러오면 에러 + [다시 시도]
+ * #18: 테이블 탭 → PUT 상태 전환 → 성공 applyStatus / 실패 revertStatus + 토스트
  */
 @Composable
 fun ViewScreen(onBack: () -> Unit) {
@@ -70,6 +76,9 @@ fun ViewScreen(onBack: () -> Unit) {
     var state by remember { mutableStateOf(ViewerState.LOADING) }
     var errorText by remember { mutableStateOf("") }
     var summary by remember { mutableStateOf<Pair<Int, Int>?>(null) }  // 빈 테이블 / 전체 (웹 onSummary)
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val pending = remember { mutableSetOf<String>() }                // #18: 상태 전환 요청 중인 테이블
     fun fail(text: String) {
         state = ViewerState.ERROR
         errorText = text
@@ -158,10 +167,19 @@ fun ViewScreen(onBack: () -> Unit) {
                     OwnerWebView(
                         url = current,
                         onReady = { if (state == ViewerState.LOADING) state = ViewerState.READY },
-                        onTableTap = { webView, tableId, occupied ->
-                            // 상태 전환 API는 #18. 지금은 웹의 흐림만 바로 풀어 둠
-                            Log.d("OwnerBridge", "onTableTap $tableId $occupied")
-                            webView.evaluateJavascript(revertStatusJs(tableId), null)
+                        onTableTap = onTableTap@{ webView, tableId, occupied ->
+                            if (!pending.add(tableId)) return@onTableTap   // 요청 중인 테이블은 무시
+                            scope.launch {
+                                try {
+                                    val res = apiCall { Server.api.changeStatus(tableId, UpdateStatusRequest(!occupied)) }
+                                    webView.evaluateJavascript(applyStatusJs(tableId, res.occupied), null)
+                                } catch (e: ApiException) {
+                                    webView.evaluateJavascript(revertStatusJs(tableId), null)
+                                    Toast.makeText(context, e.displayMessage(), Toast.LENGTH_SHORT).show()
+                                } finally {
+                                    pending.remove(tableId)
+                                }
+                            }
                         },
                         onSummary = { free, total -> summary = free to total },
                         onError = { fail("인터넷 연결을 확인해 주세요") },

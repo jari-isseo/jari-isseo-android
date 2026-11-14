@@ -31,6 +31,14 @@ data class MyStore(
     val hasLayout: Boolean,
 )
 
+/** #18: PUT /api/owner/tables/{tableId}/status — 토글이 아니라 바꿀 값 */
+@Serializable
+data class UpdateStatusRequest(val occupied: Boolean)
+
+/** #18: 200 (source·updatedAt은 쓰지 않아 생략) */
+@Serializable
+data class TableStatusResponse(val tableId: String, val occupied: Boolean)
+
 /** 모든 에러 응답: { "code": "TABLE_NOT_FOUND", "message": "테이블을 찾을 수 없어요" } */
 @Serializable
 data class ErrorBody(val code: String, val message: String)

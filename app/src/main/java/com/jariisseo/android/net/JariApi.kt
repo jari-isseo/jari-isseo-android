@@ -4,6 +4,7 @@ import retrofit2.http.Body
 import retrofit2.http.GET
 import retrofit2.http.POST
 import retrofit2.http.PUT
+import retrofit2.http.Path
 
 /** #11: 서버 API (배치 저장은 #15, 상태 전환은 #18에서 추가). 실패는 apiCall로 감싸서 ApiException으로 */
 interface JariApi {
@@ -23,4 +24,8 @@ interface JariApi {
     /** #15: 항상 모든 층을 포함한 전체. 응답은 서버가 정리한 배치 + 새 version */
     @PUT("api/owner/store/layout")
     suspend fun saveLayout(@Body body: LayoutDto): LayoutDto
+
+    /** #18: 없는 테이블이면 404 TABLE_NOT_FOUND */
+    @PUT("api/owner/tables/{tableId}/status")
+    suspend fun changeStatus(@Path("tableId") tableId: String, @Body body: UpdateStatusRequest): TableStatusResponse
 }
