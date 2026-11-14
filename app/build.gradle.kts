@@ -13,9 +13,12 @@ val localProps = Properties().apply {
     val f = rootProject.file("local.properties")
     if (f.exists()) f.inputStream().use { load(it) }
 }
-val devServerUrl: String = localProps.getProperty("devServerUrl") ?: "http://10.0.2.2:8080/"
+val devServerUrl: String = localProps.getProperty("devServerUrl")?.trim() ?: "http://10.0.2.2:8080/"
 // TODO(server#26): 도메인·HTTPS 연결 후 실제 주소로
 val releaseServerUrl = "https://jari-isseo.invalid/"
+// #17: debug에서 local.properties에 viewerSample=true면 사장님 뷰가 실제 매장(/s/{publicId}) 대신 샘플 뷰어를 엶
+//   (손님 웹 페이지는 server#16 전이라 없음). release는 항상 실제 매장
+val viewerSample: Boolean = localProps.getProperty("viewerSample")?.trim()?.toBoolean() ?: false   // properties는 값 뒤 공백을 남김
 
 android {
     namespace = "com.jariisseo.android"
@@ -34,9 +37,11 @@ android {
     buildTypes {
         debug {
             buildConfigField("String", "BASE_URL", "\"$devServerUrl\"")
+            buildConfigField("boolean", "VIEWER_SAMPLE", "$viewerSample")
         }
         release {
             buildConfigField("String", "BASE_URL", "\"$releaseServerUrl\"")
+            buildConfigField("boolean", "VIEWER_SAMPLE", "false")
             isMinifyEnabled = false
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
