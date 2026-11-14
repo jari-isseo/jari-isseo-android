@@ -1,9 +1,11 @@
 package com.jariisseo.android
 
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
+import com.jariisseo.android.net.Server
 import com.jariisseo.android.ui.screen.EditScreen
 import com.jariisseo.android.ui.screen.HomeScreen
 import com.jariisseo.android.ui.screen.LoginScreen
@@ -22,6 +24,7 @@ object Route {
  * #10: 로그인 → 홈 → 스캔 → 보정 → 뷰.
  * 스캔 화면은 AR 객체를 가진 MainActivity가 그려서 넘김 (onClose = 홈으로, onDone = [스캔 완료]).
  * #13: 보정할 배치(layout)는 MainActivity가 들고 있고, 보정 화면의 변경은 onLayoutChange로 돌려줌
+ * #11: 사장님 API가 401(토큰 없음·만료)이면 어느 화면에 있든 로그인으로 (뒤로 가기 기록도 비움)
  */
 @Composable
 fun AppNav(
@@ -30,6 +33,14 @@ fun AppNav(
     onLayoutChange: (Layout) -> Unit,
 ) {
     val nav = rememberNavController()
+    LaunchedEffect(nav) {
+        Server.loggedOut.collect {
+            nav.navigate(Route.LOGIN) {
+                popUpTo(nav.graph.id) { inclusive = true }
+                launchSingleTop = true
+            }
+        }
+    }
     NavHost(navController = nav, startDestination = Route.LOGIN) {
         composable(Route.LOGIN) {
             LoginScreen(onLogin = {

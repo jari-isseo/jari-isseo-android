@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- #11: debug 전용. 로컬·개발 서버가 HTTP라 cleartext 허용 (Android 9+ 기본 차단) -->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="true" />
+</network-security-config>
