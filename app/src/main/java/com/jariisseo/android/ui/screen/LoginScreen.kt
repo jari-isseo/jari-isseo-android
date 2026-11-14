@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.OutlinedTextField
@@ -24,6 +25,8 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -32,6 +35,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
@@ -39,21 +43,49 @@ import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.jariisseo.android.net.ApiException
+import com.jariisseo.android.net.Server
+import com.jariisseo.android.net.displayMessage
 import com.jariisseo.android.ui.Glyph
 import com.jariisseo.android.ui.LineIcon
 import com.jariisseo.android.ui.PrimaryButton
 import com.jariisseo.android.ui.theme.Bg
 import com.jariisseo.android.ui.theme.Brown
+import com.jariisseo.android.ui.theme.Danger
 import com.jariisseo.android.ui.theme.Ink
 import com.jariisseo.android.ui.theme.Sage
 import com.jariisseo.android.ui.theme.SageInk
 import com.jariisseo.android.ui.theme.Sub
+import kotlinx.coroutines.launch
 
-/** #10: 시안 D ③ 로그인. 입력 검증·가입은 #12 (지금은 [로그인]이 홈으로 이동만) */
+/**
+ * #10: 시안 D ③ 로그인. #12: 실제 로그인, [가입하기]는 가입 화면(SignupScreen)으로.
+ * 성공하면 토큰 저장 후 onLoggedIn. 에러는 서버 문구 그대로
+ */
 @Composable
-fun LoginScreen(onLogin: () -> Unit) {
-    var id by remember { mutableStateOf("") }
-    var password by remember { mutableStateOf("") }
+fun LoginScreen(onLoggedIn: () -> Unit, onSignup: () -> Unit) {
+    var id by rememberSaveable { mutableStateOf("") }
+    var password by remember { mutableStateOf("") }   // 비밀번호는 화면 회전 등에서 번들에 남기지 않음
+    var loading by remember { mutableStateOf(false) }
+    var error by remember { mutableStateOf<String?>(null) }
+    val scope = rememberCoroutineScope()
+
+    val canSubmit = !loading && id.isNotBlank() && password.isNotEmpty()
+    fun submit() {
+        if (!canSubmit) return
+        loading = true
+        error = null
+        scope.launch {
+            try {
+                Server.auth.login(id, password)
+                onLoggedIn()
+            } catch (e: ApiException) {
+                error = e.displayMessage()
+            } finally {
+                loading = false
+            }
+        }
+    }
 
     // 화면이 짧으면(멀티 윈도우·키보드) 스크롤, 길면 버튼이 맨 아래에 붙도록 최소 높이 = 화면 높이
     BoxWithConstraints(Modifier.fillMaxSize().background(Bg)) {
@@ -75,13 +107,18 @@ fun LoginScreen(onLogin: () -> Unit) {
             Spacer(Modifier.height(36.dp))
 
             Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
-                Field("아이디", id, { id = it })
-                Field("비밀번호", password, { password = it }, placeholder = "8자 이상", secret = true)
+                Field("아이디", id, { id = it; error = null })
+                Field("비밀번호", password, { password = it; error = null }, secret = true, last = true, onDone = ::submit)
             }
 
             Spacer(Modifier.weight(1f))
-            PrimaryButton("로그인", onLogin, Modifier.fillMaxWidth().padding(top = 24.dp))
-            TextButton(onClick = {}, modifier = Modifier.align(Alignment.CenterHorizontally).padding(top = 8.dp, bottom = 20.dp)) {
+            error?.let { Text(it, Modifier.padding(top = 20.dp), color = Danger, fontSize = 14.sp) }
+            PrimaryButton(if (loading) "확인 중…" else "로그인", ::submit, Modifier.fillMaxWidth().padding(top = 12.dp), enabled = canSubmit)
+            TextButton(
+                onClick = onSignup,
+                enabled = !loading,
+                modifier = Modifier.align(Alignment.CenterHorizontally).padding(top = 8.dp, bottom = 20.dp),
+            ) {
                 Text(
                     buildAnnotatedString {
                         withStyle(SpanStyle(color = Sub)) { append("처음이신가요? ") }
@@ -94,8 +131,17 @@ fun LoginScreen(onLogin: () -> Unit) {
     }
 }
 
+/** 로그인·가입 입력 칸. last = 마지막 칸 (키보드 [완료] = onDone), 아니면 [다음] */
 @Composable
-private fun Field(label: String, value: String, onChange: (String) -> Unit, placeholder: String = "", secret: Boolean = false) {
+internal fun Field(
+    label: String,
+    value: String,
+    onChange: (String) -> Unit,
+    placeholder: String = "",
+    secret: Boolean = false,
+    last: Boolean = false,
+    onDone: () -> Unit = {},
+) {
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Text(label, fontSize = 13.sp, fontWeight = FontWeight.Bold, color = Sub)
         OutlinedTextField(
@@ -106,7 +152,11 @@ private fun Field(label: String, value: String, onChange: (String) -> Unit, plac
             singleLine = true,
             shape = RoundedCornerShape(20.dp),
             visualTransformation = if (secret) PasswordVisualTransformation() else VisualTransformation.None,
-            keyboardOptions = KeyboardOptions(keyboardType = if (secret) KeyboardType.Password else KeyboardType.Text),
+            keyboardOptions = KeyboardOptions(
+                keyboardType = if (secret) KeyboardType.Password else KeyboardType.Text,
+                imeAction = if (last) ImeAction.Done else ImeAction.Next,
+            ),
+            keyboardActions = KeyboardActions(onDone = { onDone() }),
             colors = OutlinedTextFieldDefaults.colors(
                 focusedBorderColor = Brown,
                 unfocusedBorderColor = Color.Transparent,
