@@ -16,6 +16,7 @@ data class WallTouch(val x: Float, val z: Float, val nx: Float, val nz: Float)
 object CornerOutline {
     const val SQUARE_DEG = 10f      // 주 방향(0°/90°)에서 이 안의 변은 반듯하게
     const val PARALLEL_DEG = 20f    // 이웃한 두 벽이 이 안으로 나란하면 교점 대신 수선으로 이음
+    const val NEAR_M = 0.3f         // #40: 외곽선 밖으로 이만큼까지는 가구로 인정 (인식 위치 오차)
 
     /** 벽 3개 이상 → 외곽선 (직각 정리 포함). 모자라면 빈 목록 */
     fun fromWalls(walls: List<WallTouch>): List<Pair<Float, Float>> {
@@ -73,6 +74,22 @@ object CornerOutline {
     /** 외곽선 각 변 = 벽 */
     fun edges(points: List<Pair<Float, Float>>): List<WallLine> =
         if (points.size < 3) emptyList() else points.indices.map { points[it] to points[(it + 1) % points.size] }
+
+    /** #40: 점이 외곽선 안이거나 변에서 margin 이내인지 (외곽선 밖 가구 거르기, 벽에 붙은 가구는 살림) */
+    fun near(outline: List<Pair<Float, Float>>, p: Pair<Float, Float>, margin: Float = NEAR_M): Boolean {
+        if (outline.size < 3) return false
+        if (FloorPolygon.contains(outline, p.first, p.second)) return true
+        return edges(outline).any { (a, b) -> segmentDist(a, b, p) <= margin }
+    }
+
+    /** 점 p와 선분 ab 사이 거리 */
+    private fun segmentDist(a: Pair<Float, Float>, b: Pair<Float, Float>, p: Pair<Float, Float>): Float {
+        val dx = b.first - a.first
+        val dz = b.second - a.second
+        val len2 = dx * dx + dz * dz
+        val t = if (len2 == 0f) 0f else (((p.first - a.first) * dx + (p.second - a.second) * dz) / len2).coerceIn(0f, 1f)
+        return dist(p, a.first + dx * t to a.second + dz * t)
+    }
 
     /** 벽 방향 단위벡터 = 법선에 수직 */
     private fun direction(w: WallTouch): Pair<Float, Float> {
