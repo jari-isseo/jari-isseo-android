@@ -20,10 +20,15 @@ object Route {
 
 /**
  * #10: 로그인 → 홈 → 스캔 → 보정 → 뷰.
- * 스캔 화면은 AR 객체를 가진 MainActivity가 그려서 넘김 (onClose = 홈으로, onDone = [스캔 완료])
+ * 스캔 화면은 AR 객체를 가진 MainActivity가 그려서 넘김 (onClose = 홈으로, onDone = [스캔 완료]).
+ * #13: 보정할 배치(layout)는 MainActivity가 들고 있고, 보정 화면의 변경은 onLayoutChange로 돌려줌
  */
 @Composable
-fun AppNav(scanContent: @Composable (onClose: () -> Unit, onDone: () -> Unit) -> Unit) {
+fun AppNav(
+    scanContent: @Composable (onClose: () -> Unit, onDone: () -> Unit) -> Unit,
+    layout: Layout?,
+    onLayoutChange: (Layout) -> Unit,
+) {
     val nav = rememberNavController()
     NavHost(navController = nav, startDestination = Route.LOGIN) {
         composable(Route.LOGIN) {
@@ -44,6 +49,8 @@ fun AppNav(scanContent: @Composable (onClose: () -> Unit, onDone: () -> Unit) ->
         }
         composable(Route.EDIT) {
             EditScreen(
+                layout = layout,
+                onChange = onLayoutChange,
                 onBack = { nav.popBackStack() },
                 onSave = { nav.navigate(Route.VIEW) { popUpTo(Route.HOME) } },   // 저장 후 뒤로 가기 = 홈
             )
