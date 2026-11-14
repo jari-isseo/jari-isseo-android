@@ -20,22 +20,25 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
@@ -54,11 +57,18 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
 import androidx.core.content.FileProvider
-import com.jariisseo.android.ui.theme.JariIsseoTheme
 import com.google.ar.core.ArCoreApk
 import com.google.ar.core.Config
 import com.google.ar.core.Session
 import com.google.ar.core.exceptions.CameraNotAvailableException
+import com.jariisseo.android.ui.BigNumber
+import com.jariisseo.android.ui.CircleButton
+import com.jariisseo.android.ui.Glyph
+import com.jariisseo.android.ui.theme.Brown
+import com.jariisseo.android.ui.theme.Ink
+import com.jariisseo.android.ui.theme.JariIsseoTheme
+import com.jariisseo.android.ui.theme.Sage
+import com.jariisseo.android.ui.theme.SageInk
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -72,6 +82,10 @@ class MainActivity : ComponentActivity() {
 
     private var session: Session? = null          // ARCore 엔진. 처음엔 없음(null)
     private var installRequested = false          // AR 서비스 설치 화면을 이미 띄웠는지
+
+    // #10: AR(카메라·인식)은 스캔 화면이 보이고 액티비티가 resume 상태일 때만 동작
+    private var scanVisible = false
+    private var resumed = false
 
     // ★ 8교시: Detector는 assets(Context)가 필요해서 onCreate에서 만들어야 함 → renderer도 onCreate에서
     private lateinit var renderer: ArRenderer
@@ -114,9 +128,10 @@ class MainActivity : ComponentActivity() {
             }
         }
 
+        // #10: 로그인 → 홈 → 스캔 → 보정 → 뷰 (스캔 화면만 여기서 그림)
         setContent {
             JariIsseoTheme {
-                ScanScreen()
+                AppNav(scanContent = { onClose, onDone -> ScanScreen(onClose, onDone) })
             }
         }
 
@@ -125,9 +140,20 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    @androidx.compose.runtime.Composable
-    private fun ScanScreen() {
+    @Composable
+    private fun ScanScreen(onClose: () -> Unit, onDone: () -> Unit) {
         val state = uiState
+
+        // #10: 스캔 화면에 들어오면 AR 시작, 나가면 정지 (벽·가구 기록은 renderer에 유지)
+        DisposableEffect(Unit) {
+            scanVisible = true
+            startAr()
+            onDispose {
+                scanVisible = false
+                stopAr()
+            }
+        }
+
         Box(Modifier.fillMaxSize()) {
             // 1층: 카메라 영상 (OpenGL)
             AndroidView(factory = { glView }, modifier = Modifier.fillMaxSize())
@@ -149,8 +175,8 @@ class MainActivity : ComponentActivity() {
                 // ★ 8교시: 인식 박스 + 라벨
                 state.boxes.forEach { b ->
                     val color = when (b.label) {
-                        "테이블" -> Color.Green
-                        "의자" -> Color.Cyan
+                        "테이블" -> Color(0xFFC9DDB9)   // 시안 D 연한 세이지
+                        "의자" -> Color.White
                         else -> Color.Magenta
                     }
                     drawRect(
@@ -166,132 +192,199 @@ class MainActivity : ComponentActivity() {
                 }
             }
 
-            // 3층 위쪽: #40 단계 표시 + 추적 상태 + 평면 개수
-            Column(
-                modifier = Modifier
-                    .align(Alignment.TopCenter)
-                    .padding(top = 48.dp)
-                    .background(Color.Black.copy(alpha = 0.6f))
-                    .padding(12.dp),
-                horizontalAlignment = Alignment.CenterHorizontally,
-            ) {
-                StepIndicator(step = if (state.outlineClosed) 2 else 1)
-                Spacer(Modifier.height(8.dp))
-                Text(state.status, color = Color.White)
-                Text(
-                    "평면: 바닥 ${state.floorPlanes}개 · 벽 ${state.walls.size}개",
-                    color = Color.White,
-                )
-                Text(modelInfo, color = Color.Yellow)   // ★ 8교시
-                Text(state.detectInfo, color = Color.Yellow)
+            // 3층 위쪽: #10 시안 D 상단바 (원형 X + 제목) + #40 단계 표시 + 개발용 정보
+            Column(Modifier.align(Alignment.TopCenter).fillMaxWidth().padding(top = 16.dp)) {
+                Box(Modifier.fillMaxWidth().height(56.dp).padding(horizontal = 16.dp)) {
+                    Box(Modifier.align(Alignment.CenterStart)) {
+                        CircleButton(Glyph.CLOSE, "스캔 그만두기", onClose, fill = Color.White.copy(alpha = 0.16f), tint = Color.White)
+                    }
+                    Text("1층 스캔", Modifier.align(Alignment.Center), color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.Bold)
+                }
+                StepIndicator(step = if (state.outlineClosed) 2 else 1, modifier = Modifier.align(Alignment.CenterHorizontally).padding(top = 8.dp))
+                // 개발용 정보 (추적 상태·평면·모델·추론·두 점 거리)
+                Column(
+                    Modifier
+                        .padding(start = 12.dp, top = 10.dp)
+                        .background(Color.Black.copy(alpha = 0.45f), RoundedCornerShape(8.dp))
+                        .padding(horizontal = 8.dp, vertical = 6.dp),
+                ) {
+                    val dev = Color.White.copy(alpha = 0.85f)
+                    Text(state.status, color = dev, fontSize = 11.sp)
+                    Text("평면: 바닥 ${state.floorPlanes}개 · 벽 ${state.walls.size}개", color = dev, fontSize = 11.sp)
+                    Text(modelInfo, color = dev, fontSize = 11.sp)   // ★ 8교시
+                    if (state.detectInfo.isNotEmpty()) Text(state.detectInfo, color = dev, fontSize = 11.sp)
+                    state.lastDistanceM?.let { Text("두 점 거리: %.2f m".format(it), color = dev, fontSize = 11.sp) }
+                }
             }
 
-            // ★ 3층 아래쪽: [#40 단계 안내 + 단계 버튼] / [왼쪽] 거리 + 안내 + 가구 수 · [오른쪽] 9교시 탑뷰 미니맵 / [버튼]
-            // #40: 외곽선 미완료 = 1단계(벽), 완료 = 2단계(가구)
-            val wallStep = !state.outlineClosed
-            Column(
-                modifier = Modifier
-                    .align(Alignment.BottomCenter)
-                    .fillMaxWidth()
-                    .background(Color.Black.copy(alpha = 0.6f))
-                    .padding(12.dp),
-            ) {
-                Text(
-                    if (wallStep) "벽을 돌아가며 순서대로 화면을 벽에 대고 볼륨 버튼 (진동 1번 = 기록, 2번 = 실패)"
-                    else "매장을 천천히 걸으며 테이블·의자를 비춰 주세요",
-                    color = Color.White, fontSize = 13.sp,
-                )
+            // 3층 아래쪽: #10 시안 D 하단 시트. #40: 외곽선 미완료 = 1단계(벽), 완료 = 2단계(가구)
+            ScanSheet(state, onDone, Modifier.align(Alignment.BottomCenter))
+        }
+    }
+
+    @Composable
+    private fun ScanSheet(state: ArUiState, onDone: () -> Unit, modifier: Modifier) {
+        val wallStep = !state.outlineClosed
+        val confirmed = state.mapItems.filter { it.confirmed }
+        val dim = Color.White.copy(alpha = 0.75f)
+        // 카메라를 최대한 보이게: 하단에 떠 있는 어두운 반투명 패널 (흰 시트 대신)
+        Column(
+            modifier
+                .padding(start = 12.dp, end = 12.dp, bottom = 16.dp)
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(28.dp))
+                .background(Color(0xC71C1714))
+                .padding(start = 18.dp, end = 14.dp, top = 14.dp, bottom = 10.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            val walls = state.touchedWalls.size   // 1단계에서 기록한 벽 수 (완료되면 비워짐)
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    Row(verticalAlignment = Alignment.Bottom, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Text(if (wallStep) "기록한 벽" else "찾은 테이블", Modifier.padding(bottom = 3.dp), fontSize = 14.sp, color = dim)
+                        BigNumber(if (wallStep) "$walls" else "${confirmed.count { it.label == "테이블" }}", color = Color.White, size = 32)
+                        Text("개", Modifier.padding(bottom = 2.dp), fontSize = 15.sp, fontWeight = FontWeight.Bold, color = Color.White)
+                    }
+                    Text(
+                        if (wallStep) "화면을 벽에 대고 볼륨 버튼 · 3개부터 완료"
+                        else "의자 ${confirmed.count { it.label == "의자" }} · 천천히 걸으며 비춰 주세요",
+                        fontSize = 12.sp, color = dim,
+                    )
+                    Text(state.message, fontSize = 11.sp, color = Color.White.copy(alpha = 0.55f), maxLines = 1)
+                }
+                MiniMap(state, Modifier.size(64.dp).clip(RoundedCornerShape(16.dp)))
+            }
+
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 if (wallStep) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Button(onClick = { renderer.outlineOp(OutlineOp.RECORD) }, modifier = Modifier.weight(1f)) {
-                            Text("기록")
-                        }
-                        TextButton(onClick = { renderer.outlineOp(OutlineOp.UNDO) }) { Text("되돌리기") }
-                        TextButton(onClick = { renderer.outlineOp(OutlineOp.RESET) }) { Text("다시") }
-                        TextButton(onClick = { renderer.outlineOp(OutlineOp.CLOSE) }) { Text("완료") }
-                    }
+                    GlassButton("기록", { renderer.outlineOp(OutlineOp.RECORD) }, Modifier.weight(1f))
+                    LightButton("벽 완료", { renderer.outlineOp(OutlineOp.CLOSE) }, Modifier.weight(2f), enabled = walls >= 3)
+                } else {
+                    // [벽 다시] = 완료만 풀고 1단계로 (기록한 벽·인식한 가구는 유지)
+                    GlassButton("벽 다시", { renderer.outlineOp(OutlineOp.UNDO) }, Modifier.weight(1f))
+                    LightButton("스캔 완료", onDone, Modifier.weight(2f))
                 }
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Column(Modifier.weight(1f)) {
-                        Text(
-                            text = state.lastDistanceM?.let { "두 점 거리: %.2f m".format(it) }
-                                ?: "점을 2개 찍으면 거리가 나와요",
-                            color = Color.White,
-                            fontSize = 18.sp,
-                        )
-                        Text(state.message, color = Color.LightGray, fontSize = 12.sp)
-                        val confirmed = state.mapItems.filter { it.confirmed }
-                        Text(
-                            "확정: 테이블 ${confirmed.count { it.label == "테이블" }} · " +
-                                "의자 ${confirmed.count { it.label == "의자" }} · " +
-                                "소파 ${confirmed.count { it.label == "소파" }}",
-                            color = Color.White,
-                        )
-                    }
-                    Spacer(Modifier.width(8.dp))
-                    MiniMap(state, Modifier.size(150.dp))
+            }
+
+            // 보조 동작 (작은 글자)
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Center) {
+                if (wallStep) {
+                    SmallAction("되돌리기") { renderer.outlineOp(OutlineOp.UNDO) }
+                    SmallAction("처음부터") { renderer.outlineOp(OutlineOp.RESET) }
+                } else {
+                    SmallAction("JSON 내보내기") { exportLayout() }
                 }
-                Spacer(Modifier.height(6.dp))
-                val small = PaddingValues(horizontal = 10.dp)
-                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    Button(onClick = { renderer.clear() }, contentPadding = small) { Text("모두 지우기", fontSize = 13.sp) }
-                    if (!wallStep) {
-                        // 완료만 풀고 1단계로 (기록한 벽·인식한 가구는 유지)
-                        Button(onClick = { renderer.outlineOp(OutlineOp.UNDO) }, contentPadding = small) {
-                            Text("벽 다시", fontSize = 13.sp)
-                        }
-                        Button(onClick = { exportLayout() }, contentPadding = small) { Text("JSON 내보내기", fontSize = 13.sp) }
-                    }
-                }
+                SmallAction("모두 지우기") { renderer.clear() }
             }
         }
     }
 
-    /** #40: 상단 단계 표시 (1) 벽 ── (2) 가구. 지금 단계는 채운 원, 끝난 단계는 ✓, 다음 단계는 흐린 테두리 */
-    @androidx.compose.runtime.Composable
-    private fun StepIndicator(step: Int) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            StepDot(1, "벽", step)
-            Box(
-                Modifier
-                    .padding(horizontal = 10.dp)
-                    .width(40.dp)
-                    .height(2.dp)
-                    .background(Color.White.copy(alpha = if (step > 1) 1f else 0.3f))
-            )
-            StepDot(2, "가구", step)
+    /** 스캔 패널 주요 버튼: 어두운 카메라 위라 흰 알약 + 진한 글자 */
+    @Composable
+    private fun LightButton(text: String, onClick: () -> Unit, modifier: Modifier, enabled: Boolean = true) {
+        Button(
+            onClick = onClick,
+            enabled = enabled,
+            modifier = modifier.height(50.dp),
+            shape = CircleShape,
+            colors = ButtonDefaults.buttonColors(
+                containerColor = Color.White, contentColor = Ink,
+                disabledContainerColor = Color.White.copy(alpha = 0.35f), disabledContentColor = Ink,
+            ),
+        ) { Text(text, fontSize = 16.sp, fontWeight = FontWeight.Bold) }
+    }
+
+    /** 스캔 패널 보조 버튼: 반투명 흰 테두리 알약 */
+    @Composable
+    private fun GlassButton(text: String, onClick: () -> Unit, modifier: Modifier) {
+        OutlinedButton(
+            onClick = onClick,
+            modifier = modifier.height(50.dp),
+            shape = CircleShape,
+            border = BorderStroke(1.5.dp, Color.White.copy(alpha = 0.35f)),
+            colors = ButtonDefaults.outlinedButtonColors(contentColor = Color.White),
+        ) { Text(text, fontSize = 15.sp, fontWeight = FontWeight.Bold) }
+    }
+
+    @Composable
+    private fun SmallAction(text: String, onClick: () -> Unit) {
+        TextButton(onClick = onClick) { Text(text, fontSize = 13.sp, color = Color.White.copy(alpha = 0.75f)) }
+    }
+
+    /** #40: 상단 단계 표시 (시안 D 알약). 지금 단계 = 흰 알약 + 갈색 원, 끝난 단계 = 세이지 원 ✓, 다음 단계 = 흐린 테두리 */
+    @Composable
+    private fun StepIndicator(step: Int, modifier: Modifier = Modifier) {
+        Row(
+            modifier.clip(CircleShape).background(Color.White.copy(alpha = 0.14f)).padding(4.dp),
+            horizontalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            StepPill(1, "벽", step)
+            StepPill(2, "가구", step)
         }
     }
 
-    @androidx.compose.runtime.Composable
-    private fun StepDot(n: Int, label: String, step: Int) {
+    @Composable
+    private fun StepPill(n: Int, label: String, step: Int) {
         val active = n == step
         val done = n < step
-        val dim = Color.White.copy(alpha = 0.5f)
-        Box(
-            modifier = Modifier
-                .size(26.dp)
+        val dim = Color.White.copy(alpha = 0.75f)
+        Row(
+            Modifier
+                .height(36.dp)
                 .clip(CircleShape)
-                .then(if (active || done) Modifier.background(Color.White) else Modifier.border(1.5.dp, dim, CircleShape)),
-            contentAlignment = Alignment.Center,
+                .background(if (active) Color.White else Color.Transparent)
+                .padding(start = 6.dp, end = 14.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
+            Box(
+                Modifier
+                    .size(24.dp)
+                    .clip(CircleShape)
+                    .then(
+                        when {
+                            active -> Modifier.background(Brown)
+                            done -> Modifier.background(Sage)
+                            else -> Modifier.border(1.5.dp, Color.White.copy(alpha = 0.6f), CircleShape)
+                        }
+                    ),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(
+                    if (done) "✓" else "$n",
+                    color = when {
+                        active -> Color.White
+                        done -> SageInk
+                        else -> dim
+                    },
+                    fontSize = 13.sp, fontWeight = FontWeight.Black,
+                )
+            }
             Text(
-                if (done) "✓" else "$n",
-                color = if (active || done) Color.Black else dim,
-                fontSize = 14.sp, fontWeight = FontWeight.Bold,
+                label,
+                color = if (active) Ink else dim,
+                fontSize = 14.sp,
+                fontWeight = if (active) FontWeight.Bold else FontWeight.Normal,
             )
         }
-        Spacer(Modifier.width(6.dp))
-        Text(
-            label,
-            color = if (active || done) Color.White else dim,
-            fontWeight = if (active) FontWeight.Bold else FontWeight.Normal,
-        )
     }
 
     override fun onResume() {
         super.onResume()
-        if (!hasCameraPermission()) return
+        resumed = true
+        startAr()
+    }
+
+    // 그리기 스레드를 "먼저" 멈추고 카메라 반납
+    override fun onPause() {
+        super.onPause()
+        resumed = false
+        stopAr()
+    }
+
+    /** #10: 스캔 화면이 보이고 resume 상태일 때만 세션 생성·재개 (기존 onResume 본문) */
+    private fun startAr() {
+        if (!scanVisible || !resumed || !hasCameraPermission()) return
 
         if (session == null) {
             try {
@@ -329,9 +422,8 @@ class MainActivity : ComponentActivity() {
         glView.onResume()
     }
 
-    // 그리기 스레드를 "먼저" 멈추고 카메라 반납
-    override fun onPause() {
-        super.onPause()
+    /** #10: 그리기 스레드를 "먼저" 멈추고 카메라 반납 (기존 onPause 본문) */
+    private fun stopAr() {
         glView.onPause()
         session?.pause()
     }
@@ -351,10 +443,13 @@ class MainActivity : ComponentActivity() {
         setShadowLayer(4f, 0f, 0f, android.graphics.Color.BLACK)
     }
 
-    /** #38: 1단계(벽)에서는 볼륨 버튼 = [기록] (화면을 벽에 대고 있어 화면 버튼을 못 누름). #40: 2단계에서는 원래 음량 조절 */
+    /**
+     * #38: 1단계(벽)에서는 볼륨 버튼 = [기록] (화면을 벽에 대고 있어 화면 버튼을 못 누름).
+     * #40: 2단계에서는 원래 음량 조절. #10: 스캔 화면이 아니면 원래 음량 조절
+     */
     override fun onKeyDown(keyCode: Int, event: KeyEvent): Boolean {
         val volume = keyCode == KeyEvent.KEYCODE_VOLUME_DOWN || keyCode == KeyEvent.KEYCODE_VOLUME_UP
-        if (uiState.outlineClosed || !volume) return super.onKeyDown(keyCode, event)
+        if (!scanVisible || uiState.outlineClosed || !volume) return super.onKeyDown(keyCode, event)
         if (event.repeatCount == 0) renderer.outlineOp(OutlineOp.RECORD)   // 길게 눌러도 1번만
         return true                                                         // 음량은 바꾸지 않음
     }
