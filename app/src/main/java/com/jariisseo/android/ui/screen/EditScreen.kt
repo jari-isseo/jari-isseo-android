@@ -22,18 +22,22 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -47,6 +51,10 @@ import com.jariisseo.android.TABLE_SIZE_MAX
 import com.jariisseo.android.TABLE_SIZE_MIN
 import com.jariisseo.android.TableItem
 import com.jariisseo.android.addTable
+import com.jariisseo.android.net.ApiException
+import com.jariisseo.android.net.PendingLayout
+import com.jariisseo.android.net.Server
+import com.jariisseo.android.net.displayMessage
 import com.jariisseo.android.normalizeDegrees
 import com.jariisseo.android.removeChair
 import com.jariisseo.android.removeTable
@@ -68,15 +76,17 @@ import com.jariisseo.android.ui.theme.Line
 import com.jariisseo.android.ui.theme.Sage
 import com.jariisseo.android.ui.theme.Sub
 import kotlin.math.roundToInt
+import kotlinx.coroutines.launch
 
 /**
  * #10: 시안 D ⑥ 탑뷰 보정. #13: 스캔한 배치를 탑뷰로 보여주고 테이블 드래그·확대 축소.
  * #14: 테이블 추가·탭 편집·길게 눌러 삭제, 의자 이동·삭제, 배치 전체 회전(90° + 미세 조정), 되돌리기.
- * 벽 맞추기(방 외곽선 꼭짓점)는 #26, 서버 저장(업로드)은 #15 → 지금 [저장]은 이동만
- * layout = null: 아직 스캔하지 않음
+ * #15: [저장] = 서버에 업로드 (다른 층은 그대로 두고 이 층만 교체). 다시 스캔한 층이면 상태 초기화 확인 후 저장.
+ *   들어왔을 때 보정할 배치가 없으면(layout = null) 서버 배치를 불러와 기존 테이블 ID 그대로 다시 보정.
+ * 벽 맞추기(방 외곽선 꼭짓점)는 #26
  */
 @Composable
-fun EditScreen(layout: Layout?, onChange: (Layout) -> Unit, onBack: () -> Unit, onSave: () -> Unit) {
+fun EditScreen(layout: Layout?, onChange: (Layout) -> Unit, onBack: () -> Unit, onSaved: () -> Unit) {
     var target by remember { mutableIntStateOf(0) }   // 0 = 테이블 옮기기, 1 = 벽 맞추기 (방 외곽선 꼭짓점, #26)
     // 되돌리기: 편집 한 번(끌기 1회, 시트 1회, 회전 1회) 전의 배치. 새 스캔이면 비움
     var history by remember(layout?.floorId) { mutableStateOf(listOf<Layout>()) }
@@ -91,6 +101,77 @@ fun EditScreen(layout: Layout?, onChange: (Layout) -> Unit, onBack: () -> Unit, 
     fun previewRotation(base: Layout) = onChange(rotateLayout(base, quarter * 90f + fine))
     val editing = layout?.tables?.firstOrNull { it.id == editingId }
 
+    // #15: 서버 저장·불러오기
+    val scope = rememberCoroutineScope()
+    var saving by remember { mutableStateOf(false) }
+    var message by remember { mutableStateOf<String?>(null) }           // 저장·불러오기 실패 문구
+    var confirmReset by remember { mutableStateOf<PendingLayout?>(null) }  // 다시 스캔한 층 저장 전 확인
+    var loading by remember { mutableStateOf(layout == null) }
+
+    // 보정할 배치가 없으면 서버 배치를 불러옴 (저장 안 한 로컬 편집이 있으면 그걸 그대로 씀)
+    LaunchedEffect(Unit) {
+        if (layout != null) return@LaunchedEffect
+        try {
+            Server.layouts.load()?.let(onChange)
+        } catch (e: ApiException) {
+            message = e.displayMessage()
+        } finally {
+            loading = false
+        }
+    }
+
+    fun upload(pending: PendingLayout, floorId: String) {
+        scope.launch {
+            try {
+                onChange(Server.layouts.save(pending, floorId))
+                onSaved()
+            } catch (e: ApiException) {
+                message = e.displayMessage()
+            } finally {
+                saving = false
+            }
+        }
+    }
+
+    fun save() {
+        val current = layout ?: return
+        if (saving) return
+        saving = true
+        message = null
+        scope.launch {
+            try {
+                val pending = Server.layouts.prepare(current)
+                if (pending.resetsStatus) {
+                    confirmReset = pending   // 확인 창에서 [바꾸기]면 upload, [취소]면 저장 안 함
+                    saving = false
+                } else {
+                    upload(pending, current.floorId)
+                }
+            } catch (e: ApiException) {
+                message = e.displayMessage()
+                saving = false
+            }
+        }
+    }
+
+    confirmReset?.let { pending ->
+        AlertDialog(
+            onDismissRequest = { confirmReset = null },
+            title = { Text("이 층 상태가 초기화돼요") },
+            text = { Text("다시 스캔한 배치로 바꾸면 이 층 테이블의 손님 상태가 모두 '빈자리'로 돌아가요.") },
+            confirmButton = {
+                TextButton(onClick = {
+                    confirmReset = null
+                    val floorId = layout?.floorId ?: return@TextButton
+                    saving = true
+                    upload(pending, floorId)
+                }) { Text("바꾸기", color = Danger) }
+            },
+            dismissButton = { TextButton(onClick = { confirmReset = null }) { Text("취소", color = Ink) } },
+            containerColor = Bg,
+        )
+    }
+
     Column(Modifier.fillMaxSize().background(Bg)) {
         Row(
             Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, top = 24.dp),
@@ -98,11 +179,19 @@ fun EditScreen(layout: Layout?, onChange: (Layout) -> Unit, onBack: () -> Unit, 
             verticalAlignment = Alignment.CenterVertically,
         ) {
             CircleButton(Glyph.BACK, "뒤로", onBack)
+            // 회전 모드 중에는 [완료] 전이라 저장 안 함
+            val canSave = layout != null && !saving && rotateBase == null
             Box(
-                Modifier.height(44.dp).clip(CircleShape).background(Brown).clickable(onClick = onSave).padding(horizontal = 20.dp),
+                Modifier
+                    .height(44.dp)
+                    .clip(CircleShape)
+                    .background(if (canSave) Brown else Brown.copy(alpha = 0.35f))
+                    .clickable(enabled = canSave, onClick = ::save)
+                    .padding(horizontal = 20.dp),
                 contentAlignment = Alignment.Center,
-            ) { Text("저장", color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.Bold) }
+            ) { Text(if (saving) "저장 중…" else "저장", color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.Bold) }
         }
+        message?.let { Text(it, Modifier.padding(start = 24.dp, end = 24.dp, top = 10.dp), color = Danger, fontSize = 14.sp) }
 
         // 편집 시트가 열려 있으면 제목·모드를 접어 배치도를 위로 올림 (시트에 가려지지 않게, 탑뷰 포커스와 같은 길이)
         AnimatedVisibility(
@@ -163,7 +252,7 @@ fun EditScreen(layout: Layout?, onChange: (Layout) -> Unit, onBack: () -> Unit, 
             contentAlignment = Alignment.Center,
         ) {
             if (layout == null) {
-                Text("매장을 스캔하면 배치가 여기에 보여요", fontSize = 14.sp, color = Sub)
+                Text(if (loading) "배치를 불러오는 중…" else "매장을 스캔하면 배치가 여기에 보여요", fontSize = 14.sp, color = Sub)
             } else {
                 // 벽 맞추기·회전 모드에서는 테이블·의자가 끌리지 않게 (꼭짓점 편집은 #26)
                 TopView(

@@ -102,7 +102,7 @@ fun AppNav(
                 layout = layout,
                 onChange = onLayoutChange,
                 onBack = { nav.popBackStack() },
-                onSave = { nav.navigate(Route.VIEW) { popUpTo(Route.HOME) } },   // 저장 후 뒤로 가기 = 홈
+                onSaved = { nav.navigate(Route.VIEW) { popUpTo(Route.HOME) } },   // #15: 서버 저장 성공 후. 뒤로 가기 = 홈
             )
         }
         composable(Route.VIEW) {
