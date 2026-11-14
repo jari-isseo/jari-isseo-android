@@ -17,6 +17,11 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -25,8 +30,12 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.jariisseo.android.net.ApiException
+import com.jariisseo.android.net.Server
+import com.jariisseo.android.net.apiCall
 import com.jariisseo.android.ui.BigNumber
 import com.jariisseo.android.ui.CardRow
 import com.jariisseo.android.ui.CircleButton
@@ -43,15 +52,28 @@ import com.jariisseo.android.ui.theme.Sub
 /**
  * #10: 시안 D ④ 홈. 매장 이름·빈자리 수는 서버 연동 후, 층 목록은 #25, 공유는 #22에서 채움.
  * 지금은 "1층" 한 줄과 이동만 (가짜 숫자 대신 "-")
+ * #42: 제목 = 서버의 매장 이름 (불러오기 전·실패 시 "내 매장"). 가게 정보에서 돌아오면 다시 불러옴
  */
 @Composable
-fun HomeScreen(onView: () -> Unit, onEdit: () -> Unit, onScan: () -> Unit) {
+fun HomeScreen(onView: () -> Unit, onEdit: () -> Unit, onScan: () -> Unit, onStore: () -> Unit) {
+    var storeName by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(Unit) {
+        // 401은 AuthInterceptor가 로그인으로 보냄, 그 밖의 실패는 "내 매장" 그대로
+        try {
+            storeName = apiCall { Server.api.myStore() }.name
+        } catch (_: ApiException) {
+        }
+    }
+
     Box(Modifier.fillMaxSize().background(Bg)) {
         Column(Modifier.fillMaxSize()) {
             Row(Modifier.padding(start = 24.dp, end = 24.dp, top = 40.dp), verticalAlignment = Alignment.Top) {
                 Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text("자리있어", fontSize = 14.sp, color = Sub, fontWeight = FontWeight.Medium)
-                    Text("내 매장", fontSize = 32.sp, fontWeight = FontWeight.Black)
+                    Text(
+                        storeName ?: "내 매장", fontSize = 32.sp, fontWeight = FontWeight.Black,
+                        lineHeight = 40.sp, maxLines = 2, overflow = TextOverflow.Ellipsis,
+                    )
                 }
                 CircleButton(Glyph.SHARE, "손님에게 알리기", onClick = {}, fill = Color.White)   // 공유 화면은 #22
             }
@@ -104,8 +126,7 @@ fun HomeScreen(onView: () -> Unit, onEdit: () -> Unit, onScan: () -> Unit) {
                 LineIcon(Glyph.HOME, Ink, size = 24.dp)
             }
             Spacer(Modifier.size(60.dp))
-            // 가게 정보 화면(매장 이름 등 수정)은 아직 issue 없음 → 지금은 이동 없음
-            Box(Modifier.size(48.dp).semantics { contentDescription = "가게 정보" }.clickable {}, contentAlignment = Alignment.Center) {
+            Box(Modifier.size(48.dp).semantics { contentDescription = "가게 정보" }.clickable(onClick = onStore), contentAlignment = Alignment.Center) {
                 LineIcon(Glyph.STORE, Chevron, size = 24.dp)
             }
         }

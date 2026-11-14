@@ -2,17 +2,19 @@ package com.jariisseo.android.net
 
 /**
  * #12: 가입·로그인. 성공하면 받은 토큰을 저장 (가입도 응답 토큰으로 바로 로그인 상태).
- * 실패는 ApiException 그대로 (토큰 저장 안 함)
+ * 실패는 ApiException 그대로 (토큰 저장 안 함). #42: 아이디도 같이 저장 (가게 정보 화면 표시용)
  */
-class AuthRepository(private val api: JariApi, private val saveToken: suspend (String) -> Unit) {
+class AuthRepository(private val api: JariApi, private val saveToken: suspend (token: String, loginId: String) -> Unit) {
     suspend fun login(loginId: String, password: String) {
-        val res = apiCall { api.login(LoginRequest(loginId.trim(), password)) }
-        saveToken(res.accessToken)
+        val id = loginId.trim()
+        val res = apiCall { api.login(LoginRequest(id, password)) }
+        saveToken(res.accessToken, id)
     }
 
     suspend fun signup(loginId: String, password: String, storeName: String) {
-        val res = apiCall { api.signup(SignupRequest(loginId.trim(), password, storeName)) }
-        saveToken(res.accessToken)
+        val id = loginId.trim()
+        val res = apiCall { api.signup(SignupRequest(id, password, storeName)) }
+        saveToken(res.accessToken, id)
     }
 }
 

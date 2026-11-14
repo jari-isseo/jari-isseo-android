@@ -2,6 +2,7 @@ package com.jariisseo.android.net
 
 import retrofit2.http.Body
 import retrofit2.http.GET
+import retrofit2.http.PATCH
 import retrofit2.http.POST
 import retrofit2.http.PUT
 import retrofit2.http.Path
@@ -16,6 +17,10 @@ interface JariApi {
 
     @GET("api/owner/store")
     suspend fun myStore(): MyStore
+
+    /** #42: 보낸 필드만 수정. 응답은 GET과 같은 형식 */
+    @PATCH("api/owner/store")
+    suspend fun updateStore(@Body body: UpdateStoreRequest): MyStore
 
     /** #15: 저장한 적이 없으면 404 LAYOUT_NOT_FOUND */
     @GET("api/owner/store/layout")

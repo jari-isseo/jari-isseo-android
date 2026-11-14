@@ -14,6 +14,7 @@ import org.junit.Test
 class AuthRepositoryTest {
     private lateinit var server: MockWebServer
     private var saved: String? = null
+    private var savedId: String? = null
     private lateinit var auth: AuthRepository
 
     @Before
@@ -23,7 +24,7 @@ class AuthRepositoryTest {
             override fun token(): String? = null
             override fun clearIf(token: String?) = true
         }, {})
-        auth = AuthRepository(api) { saved = it }
+        auth = AuthRepository(api) { token, id -> saved = token; savedId = id }
     }
 
     @After
@@ -48,6 +49,7 @@ class AuthRepositoryTest {
         auth.login("  cafe_moon ", "password1")
 
         assertEquals("tok-login", saved)
+        assertEquals("cafe_moon", savedId)   // #42: 공백을 뗀 아이디도 저장
         assertEquals("""{"loginId":"cafe_moon","password":"password1"}""", server.takeRequest().body.readUtf8())
     }
 
@@ -65,9 +67,10 @@ class AuthRepositoryTest {
     fun signup_success_savesSignupToken() = runTest {
         server.enqueue(json(201, """{"accessToken":"tok-signup","store":{"publicId":"k3x9q2mf","name":"카페 문"}}"""))
 
-        auth.signup("cafe_moon", "password1", "카페 문")
+        auth.signup(" cafe_moon", "password1", "카페 문")
 
         assertEquals("tok-signup", saved)
+        assertEquals("cafe_moon", savedId)
     }
 
     @Test

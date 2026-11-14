@@ -58,6 +58,29 @@ class ApiClientTest {
     }
 
     @Test
+    fun updateStore_patchesName_andParsesStore() = runTest {
+        server.enqueue(json(200, """{"publicId":"k3x9q2mf","name":"카페 문 성수점","open":true,"shareUrl":"http://x/s/k3x9q2mf","hasLayout":true}"""))
+
+        val store = apiCall { api.updateStore(UpdateStoreRequest("카페 문 성수점")) }
+
+        assertEquals("카페 문 성수점", store.name)
+        val req = server.takeRequest()
+        assertEquals("PATCH", req.method)
+        assertEquals("/api/owner/store", req.path)
+        assertEquals("""{"name":"카페 문 성수점"}""", req.body.readUtf8())
+    }
+
+    @Test
+    fun storeNameError_matchesServerRules() {
+        assertEquals("매장 이름을 입력해 주세요", storeNameError(""))
+        assertEquals("매장 이름을 입력해 주세요", storeNameError("   "))
+        assertNull(storeNameError("  카페 문  "))
+        assertNull(storeNameError("가".repeat(50)))
+        assertNull(storeNameError(" " + "가".repeat(50) + " "))   // 앞뒤 공백은 떼고 보냄
+        assertEquals("매장 이름은 50자까지예요", storeNameError("가".repeat(51)))
+    }
+
+    @Test
     fun changeStatus_putsOccupied_andParsesResponse() = runTest {
         server.enqueue(json(200, """{"tableId":"t-3f9a","occupied":true,"source":"MANUAL","updatedAt":"2026-11-12T11:30:00Z"}"""))
 
