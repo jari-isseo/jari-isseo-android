@@ -52,7 +52,6 @@ import com.jariisseo.android.TABLE_SIZE_MIN
 import com.jariisseo.android.TableItem
 import com.jariisseo.android.addTable
 import com.jariisseo.android.net.ApiException
-import com.jariisseo.android.net.PendingLayout
 import com.jariisseo.android.net.Server
 import com.jariisseo.android.net.displayMessage
 import com.jariisseo.android.normalizeDegrees
@@ -103,9 +102,9 @@ fun EditScreen(layout: Layout?, onChange: (Layout) -> Unit, onBack: () -> Unit, 
 
     // #15: 서버 저장·불러오기
     val scope = rememberCoroutineScope()
-    var saving by remember { mutableStateOf(false) }
-    var message by remember { mutableStateOf<String?>(null) }           // 저장·불러오기 실패 문구
-    var confirmReset by remember { mutableStateOf<PendingLayout?>(null) }  // 다시 스캔한 층 저장 전 확인
+    var saving by remember { mutableStateOf(false) }                  // 저장 중에는 편집을 막음 (끝나면 저장한 배치로 바뀌고 화면을 떠남)
+    var message by remember { mutableStateOf<String?>(null) }         // 저장·불러오기 실패 문구
+    var confirmReset by remember { mutableStateOf(false) }            // 다시 스캔한 층 저장 전 확인
     var loading by remember { mutableStateOf(layout == null) }
 
     // 보정할 배치가 없으면 서버 배치를 불러옴 (저장 안 한 로컬 편집이 있으면 그걸 그대로 씀)
@@ -120,10 +119,19 @@ fun EditScreen(layout: Layout?, onChange: (Layout) -> Unit, onBack: () -> Unit, 
         }
     }
 
-    fun upload(pending: PendingLayout, floorId: String) {
+    // checkReset = true면 먼저 초기화 확인이 필요한지 보고, 필요하면 확인 창만 띄우고 멈춤
+    fun save(checkReset: Boolean) {
+        val current = layout ?: return
+        if (saving) return
+        saving = true
+        message = null
         scope.launch {
             try {
-                onChange(Server.layouts.save(pending, floorId))
+                if (checkReset && Server.layouts.resetsStatus(current)) {
+                    confirmReset = true   // [바꾸기]면 save(false), [취소]면 저장 안 함
+                    return@launch
+                }
+                onChange(Server.layouts.save(current))
                 onSaved()
             } catch (e: ApiException) {
                 message = e.displayMessage()
@@ -133,41 +141,15 @@ fun EditScreen(layout: Layout?, onChange: (Layout) -> Unit, onBack: () -> Unit, 
         }
     }
 
-    fun save() {
-        val current = layout ?: return
-        if (saving) return
-        saving = true
-        message = null
-        scope.launch {
-            try {
-                val pending = Server.layouts.prepare(current)
-                if (pending.resetsStatus) {
-                    confirmReset = pending   // 확인 창에서 [바꾸기]면 upload, [취소]면 저장 안 함
-                    saving = false
-                } else {
-                    upload(pending, current.floorId)
-                }
-            } catch (e: ApiException) {
-                message = e.displayMessage()
-                saving = false
-            }
-        }
-    }
-
-    confirmReset?.let { pending ->
+    if (confirmReset) {
         AlertDialog(
-            onDismissRequest = { confirmReset = null },
+            onDismissRequest = { confirmReset = false },
             title = { Text("이 층 상태가 초기화돼요") },
             text = { Text("다시 스캔한 배치로 바꾸면 이 층 테이블의 손님 상태가 모두 '빈자리'로 돌아가요.") },
             confirmButton = {
-                TextButton(onClick = {
-                    confirmReset = null
-                    val floorId = layout?.floorId ?: return@TextButton
-                    saving = true
-                    upload(pending, floorId)
-                }) { Text("바꾸기", color = Danger) }
+                TextButton(onClick = { confirmReset = false; save(checkReset = false) }) { Text("바꾸기", color = Danger) }
             },
-            dismissButton = { TextButton(onClick = { confirmReset = null }) { Text("취소", color = Ink) } },
+            dismissButton = { TextButton(onClick = { confirmReset = false }) { Text("취소", color = Ink) } },
             containerColor = Bg,
         )
     }
@@ -186,7 +168,7 @@ fun EditScreen(layout: Layout?, onChange: (Layout) -> Unit, onBack: () -> Unit, 
                     .height(44.dp)
                     .clip(CircleShape)
                     .background(if (canSave) Brown else Brown.copy(alpha = 0.35f))
-                    .clickable(enabled = canSave, onClick = ::save)
+                    .clickable(enabled = canSave) { save(checkReset = true) }
                     .padding(horizontal = 20.dp),
                 contentAlignment = Alignment.Center,
             ) { Text(if (saving) "저장 중…" else "저장", color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.Bold) }
@@ -257,7 +239,7 @@ fun EditScreen(layout: Layout?, onChange: (Layout) -> Unit, onBack: () -> Unit, 
                 // 벽 맞추기·회전 모드에서는 테이블·의자가 끌리지 않게 (꼭짓점 편집은 #26)
                 TopView(
                     layout, onChange, Modifier.fillMaxSize(),
-                    tablesMovable = target == 0 && rotateBase == null,
+                    tablesMovable = target == 0 && rotateBase == null && !saving,
                     fitKey = "${layout.floorId}/$fitCount",
                     focusId = editing?.id,
                     onEditStart = { push(layout) },
@@ -304,11 +286,11 @@ fun EditScreen(layout: Layout?, onChange: (Layout) -> Unit, onBack: () -> Unit, 
                 Modifier.fillMaxWidth().padding(top = 16.dp, bottom = 24.dp),
                 horizontalArrangement = Arrangement.spacedBy(22.dp, Alignment.CenterHorizontally),
             ) {
-                val canEdit = layout != null && target == 0
+                val canEdit = layout != null && target == 0 && !saving
                 listOf(
                     Triple(Glyph.PLUS, "테이블 추가", canEdit),
                     Triple(Glyph.ROTATE, "배치 회전", canEdit),
-                    Triple(Glyph.UNDO, "되돌리기", history.isNotEmpty()),
+                    Triple(Glyph.UNDO, "되돌리기", history.isNotEmpty() && !saving),
                 ).forEach { (glyph, label, enabled) ->
                     Column(
                         Modifier
