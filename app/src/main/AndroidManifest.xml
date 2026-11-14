@@ -8,8 +8,11 @@
     <uses-feature android:name="android.hardware.camera" android:required="true" />
     <uses-feature android:name="android.hardware.camera.ar" android:required="true" />
 
+    <!-- #11: release는 HTTPS만. Android 8.1 이하는 기본이 HTTP 허용이라 명시적으로 막음
+         (debug는 networkSecurityConfig가 있으면 이 속성은 무시되어 개발 서버 HTTP 허용) -->
     <application
         android:allowBackup="true"
+        android:usesCleartextTraffic="false"
         android:dataExtractionRules="@xml/data_extraction_rules"
         android:fullBackupContent="@xml/backup_rules"
         android:icon="@mipmap/ic_launcher"
