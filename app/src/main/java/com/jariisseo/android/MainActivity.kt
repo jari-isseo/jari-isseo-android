@@ -64,6 +64,7 @@ import com.google.ar.core.ArCoreApk
 import com.google.ar.core.Config
 import com.google.ar.core.Session
 import com.google.ar.core.exceptions.CameraNotAvailableException
+import com.jariisseo.android.net.Server
 import com.jariisseo.android.ui.BigNumber
 import com.jariisseo.android.ui.CircleButton
 import com.jariisseo.android.ui.Glyph
@@ -104,6 +105,7 @@ class MainActivity : ComponentActivity() {
     @SuppressLint("ClickableViewAccessibility")   // POC라 접근성용 performClick 처리는 생략
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        Server.init(this)   // #11: 서버 API·토큰 저장
 
         // ★ 8교시: 모델 로드 → 실패해도 앱은 계속 (AR 측정 기능은 동작)
         val detector = try {
