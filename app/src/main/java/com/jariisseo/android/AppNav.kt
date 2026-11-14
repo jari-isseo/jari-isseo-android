@@ -19,6 +19,7 @@ import com.jariisseo.android.ui.screen.EditScreen
 import com.jariisseo.android.ui.screen.HomeScreen
 import com.jariisseo.android.ui.screen.LoginScreen
 import com.jariisseo.android.ui.screen.SignupScreen
+import com.jariisseo.android.ui.screen.StoreScreen
 import com.jariisseo.android.ui.screen.ViewScreen
 import com.jariisseo.android.ui.theme.Bg
 import kotlinx.coroutines.flow.first
@@ -31,6 +32,7 @@ object Route {
     const val SCAN = "scan"
     const val EDIT = "edit"   // 탑뷰 보정
     const val VIEW = "view"   // 사장님 뷰
+    const val STORE = "store"   // #42: 가게 정보
 }
 
 /**
@@ -47,13 +49,13 @@ fun AppNav(
     onLayoutChange: (Layout) -> Unit,
 ) {
     val nav = rememberNavController()
+    // 로그인으로 (뒤로 가기 기록을 모두 비움): 401 또는 #42 로그아웃
+    fun toLogin() = nav.navigate(Route.LOGIN) {
+        popUpTo(nav.graph.id) { inclusive = true }
+        launchSingleTop = true
+    }
     LaunchedEffect(nav) {
-        Server.loggedOut.collect {
-            nav.navigate(Route.LOGIN) {
-                popUpTo(nav.graph.id) { inclusive = true }
-                launchSingleTop = true
-            }
-        }
+        Server.loggedOut.collect { toLogin() }
     }
     // 시작 화면은 처음 한 번만 정함 (토큰을 읽는 잠깐은 배경만). 이후 토큰이 바뀌어도 NavHost를 다시 만들지 않음
     var start by rememberSaveable { mutableStateOf<String?>(null) }
@@ -92,7 +94,11 @@ fun AppNav(
                 onEdit = { nav.navigate(Route.EDIT) },
                 // 빠르게 두 번 눌러도 스캔이 쌓이지 않게 (두 스캔 화면이 같은 glView를 붙이면 크래시)
                 onScan = { nav.navigate(Route.SCAN) { launchSingleTop = true } },
+                onStore = { nav.navigate(Route.STORE) { launchSingleTop = true } },
             )
+        }
+        composable(Route.STORE) {
+            StoreScreen(onBack = { nav.popBackStack() }, onLoggedOut = { toLogin() })
         }
         composable(Route.SCAN) {
             scanContent({ nav.popBackStack() }, { nav.navigate(Route.EDIT) })
