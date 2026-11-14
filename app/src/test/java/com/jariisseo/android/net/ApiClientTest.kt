@@ -1,8 +1,10 @@
 package com.jariisseo.android.net
 
 import kotlinx.coroutines.test.runTest
+import okhttp3.mockwebserver.Dispatcher
 import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
+import okhttp3.mockwebserver.RecordedRequest
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -11,12 +13,18 @@ import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
 import org.junit.Before
 import org.junit.Test
+import java.io.IOException
 
 /** #11: 토큰 헤더·401 처리·에러 파싱 (가짜 서버) */
 class ApiClientTest {
-    private class FakeTokens(var value: String?) : TokenSource {
+    private class FakeTokens(var value: String?, val failOnClear: Boolean = false) : TokenSource {
         override fun token() = value
-        override fun clear() { value = null }
+        override fun clearIf(token: String?): Boolean {
+            if (failOnClear) throw IOException("disk full")
+            if (value != token) return false
+            value = null
+            return true
+        }
     }
 
     private lateinit var server: MockWebServer
@@ -117,5 +125,54 @@ class ApiClientTest {
         }
         assertFalse(tokens.value == null)
         assertTrue(loggedOut == 0)
+    }
+
+    @Test
+    fun successWithMissingFields_isInvalidResponse() = runTest {
+        server.enqueue(json(200, "{}"))
+
+        try {
+            apiCall { api.myStore() }
+            fail()
+        } catch (e: ApiException) {
+            assertEquals(INVALID_RESPONSE, e.code)
+            assertEquals("잠시 후 다시 시도해 주세요", e.message)
+        }
+    }
+
+    @Test
+    fun ownerApi_401_tokenClearFails_stillLogsOutAndKeeps401() = runTest {
+        tokens = FakeTokens("tok-123", failOnClear = true)
+        api = ApiClient.create(server.url("/").toString(), tokens, { loggedOut++ })
+        server.enqueue(json(401, """{"code":"UNAUTHORIZED","message":"로그인이 필요해요"}"""))
+
+        try {
+            apiCall { api.myStore() }
+            fail()
+        } catch (e: ApiException) {
+            assertEquals(401, e.status)
+            assertEquals("UNAUTHORIZED", e.code)
+        }
+        assertEquals(1, loggedOut)
+    }
+
+    @Test
+    fun ownerApi_late401_afterReLogin_keepsNewToken() = runTest {
+        // 토큰 A로 보낸 요청이 401을 받기 전에 다시 로그인해서 B가 저장됨
+        server.dispatcher = object : Dispatcher() {
+            override fun dispatch(request: RecordedRequest): MockResponse {
+                tokens.value = "tok-new"
+                return json(401, """{"code":"UNAUTHORIZED","message":"로그인이 필요해요"}""")
+            }
+        }
+
+        try {
+            apiCall { api.myStore() }
+            fail()
+        } catch (e: ApiException) {
+            assertEquals(401, e.status)
+        }
+        assertEquals("tok-new", tokens.value)
+        assertEquals(0, loggedOut)
     }
 }
