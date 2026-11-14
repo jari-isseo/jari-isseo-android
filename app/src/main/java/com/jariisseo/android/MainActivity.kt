@@ -19,6 +19,8 @@ import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.PaddingValues
@@ -39,12 +41,14 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.graphics.toArgb
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -65,7 +69,6 @@ class MainActivity : ComponentActivity() {
     // ★ 글자 하나(statusText) 대신 화면 상태 전체를 들고 있음
     private var uiState by mutableStateOf(ArUiState())
     private var modelInfo by mutableStateOf("모델 로딩 중...")   // ★ 8교시
-    private var wallMode by mutableStateOf(false)              // #38: 벽 대기 버튼 줄 표시 (꺼도 기록·외곽선은 유지)
 
     private var session: Session? = null          // ARCore 엔진. 처음엔 없음(null)
     private var installRequested = false          // AR 서비스 설치 화면을 이미 띄웠는지
@@ -163,7 +166,7 @@ class MainActivity : ComponentActivity() {
                 }
             }
 
-            // 3층 위쪽: 추적 상태 + 평면 개수
+            // 3층 위쪽: #40 단계 표시 + 추적 상태 + 평면 개수
             Column(
                 modifier = Modifier
                     .align(Alignment.TopCenter)
@@ -172,6 +175,8 @@ class MainActivity : ComponentActivity() {
                     .padding(12.dp),
                 horizontalAlignment = Alignment.CenterHorizontally,
             ) {
+                StepIndicator(step = if (state.outlineClosed) 2 else 1)
+                Spacer(Modifier.height(8.dp))
                 Text(state.status, color = Color.White)
                 Text(
                     "평면: 바닥 ${state.floorPlanes}개 · 벽 ${state.walls.size}개",
@@ -181,7 +186,9 @@ class MainActivity : ComponentActivity() {
                 Text(state.detectInfo, color = Color.Yellow)
             }
 
-            // ★ 3층 아래쪽: [#38 벽 대기 버튼] / [왼쪽] 거리 + 안내 + 가구 수 · [오른쪽] 9교시 탑뷰 미니맵 / [버튼]
+            // ★ 3층 아래쪽: [#40 단계 안내 + 단계 버튼] / [왼쪽] 거리 + 안내 + 가구 수 · [오른쪽] 9교시 탑뷰 미니맵 / [버튼]
+            // #40: 외곽선 미완료 = 1단계(벽), 완료 = 2단계(가구)
+            val wallStep = !state.outlineClosed
             Column(
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
@@ -189,12 +196,12 @@ class MainActivity : ComponentActivity() {
                     .background(Color.Black.copy(alpha = 0.6f))
                     .padding(12.dp),
             ) {
-                if (wallMode) {
-                    Text(
-                        if (state.outlineClosed) "외곽선 완료"
-                        else "벽을 돌아가며 순서대로: 화면을 벽에 평평하게 대고 볼륨 버튼 (진동 1번 = 기록, 2번 = 실패)",
-                        color = Color.White, fontSize = 13.sp,
-                    )
+                Text(
+                    if (wallStep) "벽을 돌아가며 순서대로 화면을 벽에 대고 볼륨 버튼 (진동 1번 = 기록, 2번 = 실패)"
+                    else "매장을 천천히 걸으며 테이블·의자를 비춰 주세요",
+                    color = Color.White, fontSize = 13.sp,
+                )
+                if (wallStep) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Button(onClick = { renderer.outlineOp(OutlineOp.RECORD) }, modifier = Modifier.weight(1f)) {
                             Text("기록")
@@ -228,13 +235,58 @@ class MainActivity : ComponentActivity() {
                 val small = PaddingValues(horizontal = 10.dp)
                 Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                     Button(onClick = { renderer.clear() }, contentPadding = small) { Text("모두 지우기", fontSize = 13.sp) }
-                    Button(onClick = { wallMode = !wallMode }, contentPadding = small) {
-                        Text(if (wallMode) "벽 대기 끝" else "벽 대기", fontSize = 13.sp)
+                    if (!wallStep) {
+                        // 완료만 풀고 1단계로 (기록한 벽·인식한 가구는 유지)
+                        Button(onClick = { renderer.outlineOp(OutlineOp.UNDO) }, contentPadding = small) {
+                            Text("벽 다시", fontSize = 13.sp)
+                        }
+                        Button(onClick = { exportLayout() }, contentPadding = small) { Text("JSON 내보내기", fontSize = 13.sp) }
                     }
-                    Button(onClick = { exportLayout() }, contentPadding = small) { Text("JSON 내보내기", fontSize = 13.sp) }
                 }
             }
         }
+    }
+
+    /** #40: 상단 단계 표시 (1) 벽 ── (2) 가구. 지금 단계는 채운 원, 끝난 단계는 ✓, 다음 단계는 흐린 테두리 */
+    @androidx.compose.runtime.Composable
+    private fun StepIndicator(step: Int) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            StepDot(1, "벽", step)
+            Box(
+                Modifier
+                    .padding(horizontal = 10.dp)
+                    .width(40.dp)
+                    .height(2.dp)
+                    .background(Color.White.copy(alpha = if (step > 1) 1f else 0.3f))
+            )
+            StepDot(2, "가구", step)
+        }
+    }
+
+    @androidx.compose.runtime.Composable
+    private fun StepDot(n: Int, label: String, step: Int) {
+        val active = n == step
+        val done = n < step
+        val dim = Color.White.copy(alpha = 0.5f)
+        Box(
+            modifier = Modifier
+                .size(26.dp)
+                .clip(CircleShape)
+                .then(if (active || done) Modifier.background(Color.White) else Modifier.border(1.5.dp, dim, CircleShape)),
+            contentAlignment = Alignment.Center,
+        ) {
+            Text(
+                if (done) "✓" else "$n",
+                color = if (active || done) Color.Black else dim,
+                fontSize = 14.sp, fontWeight = FontWeight.Bold,
+            )
+        }
+        Spacer(Modifier.width(6.dp))
+        Text(
+            label,
+            color = if (active || done) Color.White else dim,
+            fontWeight = if (active) FontWeight.Bold else FontWeight.Normal,
+        )
     }
 
     override fun onResume() {
@@ -299,10 +351,10 @@ class MainActivity : ComponentActivity() {
         setShadowLayer(4f, 0f, 0f, android.graphics.Color.BLACK)
     }
 
-    /** #38: 벽 대기 중에는 볼륨 버튼 = [기록] (화면을 벽에 대고 있어 화면 버튼을 못 누름) */
+    /** #38: 1단계(벽)에서는 볼륨 버튼 = [기록] (화면을 벽에 대고 있어 화면 버튼을 못 누름). #40: 2단계에서는 원래 음량 조절 */
     override fun onKeyDown(keyCode: Int, event: KeyEvent): Boolean {
         val volume = keyCode == KeyEvent.KEYCODE_VOLUME_DOWN || keyCode == KeyEvent.KEYCODE_VOLUME_UP
-        if (!wallMode || !volume) return super.onKeyDown(keyCode, event)
+        if (uiState.outlineClosed || !volume) return super.onKeyDown(keyCode, event)
         if (event.repeatCount == 0) renderer.outlineOp(OutlineOp.RECORD)   // 길게 눌러도 1번만
         return true                                                         // 음량은 바꾸지 않음
     }
@@ -325,7 +377,7 @@ class MainActivity : ComponentActivity() {
     private fun exportLayout() {
         val state = uiState
         val problem = when {
-            state.floorPolygon.size < 3 -> "바닥 외곽선이 아직 없어요. 바닥을 더 비춰주세요"
+            !state.outlineClosed -> "1단계(벽)를 먼저 완료해 주세요"
             state.mapItems.none { it.confirmed && it.label == "테이블" } -> "확정된 테이블이 없어요"
             else -> null
         }

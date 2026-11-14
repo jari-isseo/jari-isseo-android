@@ -226,8 +226,10 @@ class ArRenderer(
             }
             handleOutlineOps(frame)
             handleTaps(frame, camera)
-            maybeStartDetection(frame)
-            if (camera.trackingState == TrackingState.TRACKING) projectDetections(frame)   // 9교시
+            if (outlineClosed) {   // #40: 가구 인식은 가구 단계(외곽선 완료 후)에서만
+                maybeStartDetection(frame)
+                if (camera.trackingState == TrackingState.TRACKING) projectDetections(frame)   // 9교시
+            }
             report(buildState(session, frame, camera))
         } catch (e: Exception) {
             report(ArUiState(status = "오류: ${e.javaClass.simpleName}"))
@@ -278,7 +280,7 @@ class ArRenderer(
                         message = "벽 방향이 겹치거나 나란해요. 다른 벽을 기록해 주세요"
                     } else {
                         outlineClosed = true
-                        message = "외곽선 완료 (벽 ${wallTouchesLocal.size}개)"
+                        message = "외곽선 완료 (벽 ${wallTouchesLocal.size}개) · 매장을 천천히 걸으며 테이블·의자를 비춰 주세요"
                     }
                 }
             }
@@ -488,18 +490,21 @@ class ArRenderer(
             if (anchors.size >= 2) distance(anchors[anchors.size - 2].pose, anchors.last().pose)
             else null
 
-        // #38: 벽 기록 외곽선이 완료됐으면 자동 인식 바닥·벽 대신 외곽선(벽 선 교점, 직각 정리)과 그 변을 씀
+        // #38: 벽 기록 외곽선이 완료됐으면 자동 인식 벽 대신 외곽선(벽 선 교점, 직각 정리)과 그 변을 씀
+        // #40: 외곽선 완료 = 가구 단계. 벽 단계에서는 자동 인식 바닥은 빼고 자동 벽만 참고선으로
         val touches = wallTouchesWorld()
         val outline = if (outlineClosed) CornerOutline.fromWalls(touches).takeIf { it.size >= 3 } else null
-        // #6: 월드 좌표 → 매장 좌표 (가장 긴 벽이 x축과 평행, 최소점 (0, 0))
-        val floorWorld = outline ?: floorWorld()
+        val floorWorld = outline ?: emptyList()
         val wallsWorld = outline?.let(CornerOutline::edges) ?: wallsWorld()
-        val items = mapObjects.filter { it.anchor.trackingState == TrackingState.TRACKING }
+        // #40: 외곽선 밖(NEAR_M 초과) 가구는 제외 (유리 너머·옆방)
+        val items = mapObjects.filter {
+            it.anchor.trackingState == TrackingState.TRACKING && (outline == null || CornerOutline.near(outline, it.x() to it.z()))
+        }
         val pending = if (outline == null) touches.map { CornerOutline.segment(it) } else emptyList()
-        val store = StoreFrame.of(
-            floorWorld, wallsWorld,
-            items.map { it.x() to it.z() } + pending.flatMap { listOf(it.first, it.second) },
-        )
+        // #6: 월드 좌표 → 매장 좌표 (가장 긴 벽이 x축과 평행, 최소점 (0, 0))
+        // #40: 외곽선이 있으면 외곽선만 기준 → 가구가 추가돼도 좌표가 안 바뀜 (벽에 붙은 가구는 최대 -NEAR_M)
+        val store = if (outline != null) StoreFrame.of(outline, wallsWorld, emptyList())
+            else StoreFrame.of(floorWorld, wallsWorld, items.map { it.x() to it.z() } + pending.flatMap { listOf(it.first, it.second) })
         val (camX, camZ) = store.point(camera.pose.tx() to camera.pose.tz())
         // 카메라는 자기 -Z 방향을 바라봄 → 그 방향의 x, z 성분
         val (headX, headZ) = store.direction(-camera.pose.zAxis[0], -camera.pose.zAxis[2])
@@ -510,7 +515,7 @@ class ArRenderer(
             points = anchors.map { toScreen(it) },
             lastDistanceM = lastDistance,
             message = message,
-            boxes = latestDetections.map { toView(frame, it) },
+            boxes = if (outline != null) latestDetections.map { toView(frame, it) } else emptyList(),
             detectInfo = detectInfo,
             mapItems = items.map {
                 val (x, z) = store.point(it.x() to it.z())
@@ -543,12 +548,6 @@ class ArRenderer(
         val pose = trackedMapAnchor()?.pose ?: return null
         val y = floorLocalY ?: 0f
         return { (x, z) -> pose.transformPoint(floatArrayOf(x, y, z)).let { it[0] to it[2] } }
-    }
-
-    /** 기준 앵커 좌표 외곽선 → 지금의 월드 좌표 (앵커를 놓쳤으면 표시하지 않음) */
-    private fun floorWorld(): List<Pair<Float, Float>> {
-        val toWorld = anchorToWorld() ?: return emptyList()
-        return floorLocal.map(toWorld)
     }
 
     /** 기준 앵커 좌표 벽 선분 → 지금의 월드 좌표 */
