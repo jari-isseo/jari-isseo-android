@@ -46,6 +46,9 @@ object Server {
     /** #12: 가입·로그인 (성공 시 토큰 저장) */
     val auth by lazy { AuthRepository(api, tokens::save) }
 
+    /** #15: 배치 불러오기·저장 */
+    val layouts by lazy { LayoutRepository(api) }
+
     private val _loggedOut = MutableSharedFlow<Unit>(extraBufferCapacity = 1)
 
     /** 사장님 API가 401 (토큰 없음·만료) → 토큰은 이미 지워짐, 로그인 화면으로 */
