@@ -1,6 +1,7 @@
 package com.jariisseo.android
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import kotlin.math.abs
@@ -84,6 +85,17 @@ class CornerOutlineTest {
         val out = CornerOutline.fromWalls(listOf(w, w, w))
 
         assertEquals(0f, FloorPolygon.area(out), 1e-4f)
+    }
+
+    @Test
+    fun near_insideOrWithinMargin() {
+        val room = listOf(0f to 0f, 4f to 0f, 4f to 3f, 0f to 3f)
+
+        assertTrue(CornerOutline.near(room, 2f to 1.5f))       // 안쪽
+        assertTrue(CornerOutline.near(room, 4.2f to 1.5f))     // 벽 밖 0.2m
+        assertTrue(CornerOutline.near(room, -0.2f to -0.2f))   // 모서리 밖 0.28m
+        assertFalse(CornerOutline.near(room, 4.5f to 1.5f))    // 벽 밖 0.5m (유리 너머·옆방)
+        assertFalse(CornerOutline.near(emptyList(), 0f to 0f))
     }
 
     @Test
