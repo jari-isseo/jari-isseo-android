@@ -6,7 +6,9 @@ import okhttp3.Response
 /** 토큰 읽기·지우기 (실제는 TokenStore, 테스트는 가짜). OkHttp 스레드에서 불림 */
 interface TokenSource {
     fun token(): String?
-    fun clear()
+
+    /** 저장된 토큰이 token과 같을 때만 지우고 true (비교와 삭제를 한 번에). 그 사이 바뀌었으면 그대로 두고 false */
+    fun clearIf(token: String?): Boolean
 }
 
 /**
@@ -24,8 +26,14 @@ class AuthInterceptor(private val tokens: TokenSource, private val onUnauthorize
             if (token == null) request else request.newBuilder().header("Authorization", "Bearer $token").build(),
         )
         if (response.code == 401) {
-            tokens.clear()
-            onUnauthorized()
+            // 이 요청에 쓴 토큰이 아직 저장된 토큰일 때만 로그아웃 (그 사이 다시 로그인했으면 새 토큰은 그대로).
+            // 삭제(DataStore 쓰기)가 실패해도 이 토큰은 무효라 로그아웃하고, 401 응답은 그대로 돌려줌
+            val invalidated = try {
+                tokens.clearIf(token)
+            } catch (e: Exception) {
+                true
+            }
+            if (invalidated) onUnauthorized()
         }
         return response
     }

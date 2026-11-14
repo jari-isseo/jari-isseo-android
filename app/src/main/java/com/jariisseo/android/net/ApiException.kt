@@ -1,15 +1,17 @@
 package com.jariisseo.android.net
 
+import kotlinx.serialization.SerializationException
 import retrofit2.HttpException
 import java.io.IOException
 
 /**
  * #11: API 실패. code = 서버 에러 코드(API 정의서 7장) 또는 NETWORK, message = 화면에 그대로 보여줄 한국어 문장.
- * status = HTTP 상태 (연결 실패면 0)
+ * status = HTTP 상태 (연결 실패·응답 해석 실패면 0)
  */
 class ApiException(val status: Int, val code: String, override val message: String) : Exception(message)
 
 const val NETWORK_ERROR = "NETWORK"
+const val INVALID_RESPONSE = "INVALID_RESPONSE"   // 성공 응답인데 형식이 다름 (필드 누락 등)
 
 /** API 호출을 감싸서 실패를 ApiException 하나로 (HTTP 에러는 { code, message } 파싱) */
 suspend fun <T> apiCall(block: suspend () -> T): T =
@@ -19,6 +21,8 @@ suspend fun <T> apiCall(block: suspend () -> T): T =
         throw e.toApiException()
     } catch (e: IOException) {
         throw ApiException(0, NETWORK_ERROR, "서버에 연결할 수 없어요")
+    } catch (e: SerializationException) {
+        throw ApiException(0, INVALID_RESPONSE, "잠시 후 다시 시도해 주세요")
     }
 
 private fun HttpException.toApiException(): ApiException {

@@ -31,5 +31,14 @@ class TokenStore(context: Context) : TokenSource {
     // AuthInterceptor용: OkHttp 백그라운드 스레드에서만 불리므로 blocking
     override fun token(): String? = runBlocking { tokenFlow.first() }
 
-    override fun clear() = runBlocking { delete() }
+    override fun clearIf(token: String?): Boolean = runBlocking {
+        var cleared = false
+        store.edit {
+            if (it[ACCESS_TOKEN] == token) {
+                it.remove(ACCESS_TOKEN)
+                cleared = true
+            }
+        }
+        cleared
+    }
 }
