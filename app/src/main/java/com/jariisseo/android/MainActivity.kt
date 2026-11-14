@@ -4,6 +4,7 @@ import android.Manifest
 import android.annotation.SuppressLint
 import android.content.ClipData
 import android.content.Intent
+import android.content.pm.ActivityInfo
 import android.content.pm.PackageManager
 import android.graphics.Paint
 import android.opengl.GLSurfaceView
@@ -102,9 +103,15 @@ class MainActivity : ComponentActivity() {
             if (!granted) showStatus("카메라 권한이 거부됐어요")
         }
 
+    /** #19: 태블릿(가장 짧은 변 600dp 이상)만 회전, 폰은 세로 고정 (폰 가로는 보정·뷰의 배치도 높이가 거의 0) */
+    private fun defaultOrientation(): Int =
+        if (resources.configuration.smallestScreenWidthDp >= 600) ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+        else ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+
     @SuppressLint("ClickableViewAccessibility")   // POC라 접근성용 performClick 처리는 생략
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        requestedOrientation = defaultOrientation()
         Server.init(this)   // #11: 서버 API·토큰 저장
 
         // ★ 8교시: 모델 로드 → 실패해도 앱은 계속 (AR 측정 기능은 동작)
@@ -162,12 +169,15 @@ class MainActivity : ComponentActivity() {
         val state = uiState
 
         // #10: 스캔 화면에 들어오면 AR 시작, 나가면 정지 (벽·가구 기록은 renderer에 유지)
+        // #19: 스캔은 항상 세로 고정 (ArRenderer가 ROTATION_0 가정), 나가면 기본 방향으로
         DisposableEffect(Unit) {
+            requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
             scanVisible = true
             startAr()
             onDispose {
                 scanVisible = false
                 stopAr()
+                requestedOrientation = defaultOrientation()
             }
         }
 
