@@ -32,6 +32,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
@@ -44,6 +45,7 @@ import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.jariisseo.android.net.ApiException
+import com.jariisseo.android.net.Demo
 import com.jariisseo.android.net.Server
 import com.jariisseo.android.net.displayMessage
 import com.jariisseo.android.ui.Glyph
@@ -61,6 +63,7 @@ import kotlinx.coroutines.launch
 /**
  * #10: 시안 D ③ 로그인. #12: 실제 로그인, [가입하기]는 가입 화면(SignupScreen)으로.
  * 성공하면 토큰 저장 후 onLoggedIn. 에러는 서버 문구 그대로
+ * #16: [데모로 체험하기] = 데모 계정으로 로그인하고 배치를 샘플로 초기화 → 홈 (ARCore 없는 기기용)
  */
 @Composable
 fun LoginScreen(onLoggedIn: () -> Unit, onSignup: () -> Unit) {
@@ -70,7 +73,24 @@ fun LoginScreen(onLoggedIn: () -> Unit, onSignup: () -> Unit) {
     var error by remember { mutableStateOf<String?>(null) }
     val scope = rememberCoroutineScope()
 
+    val context = LocalContext.current
     val canSubmit = !loading && id.isNotBlank() && password.isNotEmpty()
+    fun demo() {
+        if (loading) return
+        loading = true
+        error = null
+        scope.launch {
+            try {
+                val json = context.assets.open(Demo.LAYOUT_ASSET).bufferedReader().use { it.readText() }
+                Server.demo.start(json)
+                onLoggedIn()
+            } catch (e: ApiException) {
+                error = e.displayMessage()
+            } finally {
+                loading = false
+            }
+        }
+    }
     fun submit() {
         // canSubmit은 그린 시점 값이라, 다시 그리기 전에 두 번 눌리면 둘 다 통과 → loading은 지금 값으로 확인
         if (loading || !canSubmit) return
@@ -118,7 +138,7 @@ fun LoginScreen(onLoggedIn: () -> Unit, onSignup: () -> Unit) {
             TextButton(
                 onClick = onSignup,
                 enabled = !loading,
-                modifier = Modifier.align(Alignment.CenterHorizontally).padding(top = 8.dp, bottom = 20.dp),
+                modifier = Modifier.align(Alignment.CenterHorizontally).padding(top = 8.dp),
             ) {
                 Text(
                     buildAnnotatedString {
@@ -127,6 +147,14 @@ fun LoginScreen(onLoggedIn: () -> Unit, onSignup: () -> Unit) {
                     },
                     fontSize = 15.sp,
                 )
+            }
+            // #16: 스캔 없이 샘플 배치로 둘러보기
+            TextButton(
+                onClick = ::demo,
+                enabled = !loading,
+                modifier = Modifier.align(Alignment.CenterHorizontally).padding(bottom = 20.dp),
+            ) {
+                Text("데모로 체험하기", color = Sub, fontSize = 14.sp, textDecoration = TextDecoration.Underline)
             }
         }
     }

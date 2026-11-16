@@ -8,6 +8,7 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.ui.platform.LocalContext
 import com.jariisseo.android.net.FloorDto
 import com.jariisseo.android.net.FloorTarget
+import com.jariisseo.android.ArSupport
 import com.jariisseo.android.net.MAX_FLOORS
 import com.jariisseo.android.net.displayMessage
 import com.jariisseo.android.ui.PillTab
@@ -59,11 +60,21 @@ import com.jariisseo.android.ui.theme.Sage
 import com.jariisseo.android.ui.theme.SageInk
 import com.jariisseo.android.ui.theme.Sub
 
+/** #16: 지금 스캔할 수 없는 이유 (스캔 가능하면 null) */
+private fun noScanMessage(ar: ArSupport): String? = when (ar) {
+    ArSupport.SUPPORTED -> null
+    ArSupport.CHECKING -> "AR 지원 여부를 확인하고 있어요 · 잠시 후 다시 눌러 주세요"
+    ArSupport.UNSUPPORTED -> "이 기기는 AR 스캔을 지원하지 않아요 · 데모 배치로 둘러보세요"
+    ArSupport.UNKNOWN -> "AR 지원 여부를 확인하지 못했어요 · 다시 확인할게요"
+}
+
 /**
  * #10: 시안 D ④ 홈. 빈자리 수는 서버 연동 후 (가짜 숫자 대신 "-")
  * #42: 제목 = 서버의 매장 이름 (불러오기 전·실패 시 "내 매장"). 가게 정보에서 돌아오면 다시 불러옴
  * #22: 오른쪽 위 [손님에게 알리기] → 공유 화면
  * #25: 층 목록 = 서버 배치의 층 (이름 · 테이블 수). 행을 누르면 층 관리 시트, [+] = 층 추가 (10개까지)
+ * #16: AR 지원이 확인되지 않았으면(arSupport != SUPPORTED) [+]·[첫 층 스캔하기]·[다시 스캔]을 막고 안내 (보정·상태 관리는 그대로).
+ *   알 수 없음이면 누를 때 다시 확인
  */
 @Composable
 fun HomeScreen(
@@ -73,7 +84,10 @@ fun HomeScreen(
     onAddFloor: () -> Unit,
     onStore: () -> Unit,
     onShare: () -> Unit,
+    arSupport: ArSupport = ArSupport.SUPPORTED,
+    onRecheckAr: () -> Unit = {},
 ) {
+    val noScan = noScanMessage(arSupport)
     val context = LocalContext.current
     var storeName by remember { mutableStateOf<String?>(null) }
     var floorsAttempt by remember { mutableIntStateOf(0) }   // 층 관리 후·[다시 시도]마다 +1
@@ -96,7 +110,10 @@ fun HomeScreen(
         }
     }
     fun addFloor() {
-        if ((floors?.size ?: 0) >= MAX_FLOORS) {
+        if (noScan != null) {
+            Toast.makeText(context, noScan, Toast.LENGTH_SHORT).show()
+            if (arSupport == ArSupport.UNKNOWN) onRecheckAr()
+        } else if ((floors?.size ?: 0) >= MAX_FLOORS) {
             Toast.makeText(context, "층은 ${MAX_FLOORS}개까지 만들 수 있어요", Toast.LENGTH_SHORT).show()
         } else {
             onAddFloor()
@@ -113,6 +130,7 @@ fun HomeScreen(
             onEdit = { managing = null; onEditFloor(FloorTarget.Existing(floor.id, floor.name)) },
             onRescan = { managing = null; onRescanFloor(FloorTarget.Existing(floor.id, floor.name)) },
             onChanged = { managing = null; floorsAttempt++ },
+            scanSupported = noScan == null,
         )
     }
 
@@ -168,7 +186,11 @@ fun HomeScreen(
                         PillTab("다시 시도", selected = true) { floorsAttempt++ }
                     }
                     list == null -> Text("층을 불러오는 중…", fontSize = 14.sp, color = Sub)
-                    list.isEmpty() -> CardRow("첫 층 스캔하기", "아직 스캔한 층이 없어요", onClick = ::addFloor)
+                    list.isEmpty() -> CardRow(
+                        "첫 층 스캔하기",
+                        noScan ?: "아직 스캔한 층이 없어요",
+                        onClick = ::addFloor,
+                    )
                     else -> list.forEach { floor ->
                         CardRow(floor.name, "테이블 ${floor.tables.size}개", onClick = { managing = floor })
                     }
@@ -204,7 +226,7 @@ fun HomeScreen(
                 .size(60.dp)
                 .shadow(10.dp, CircleShape)
                 .clip(CircleShape)
-                .background(Brown)
+                .background(if (noScan == null) Brown else Brown.copy(alpha = 0.35f))   // #16: 스캔 불가면 흐리게 (누르면 안내)
                 .semantics { contentDescription = "층 추가하고 스캔하기" }
                 .clickable(onClick = ::addFloor),
             contentAlignment = Alignment.Center,

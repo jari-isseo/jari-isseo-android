@@ -49,6 +49,9 @@ object Server {
     /** #15: 배치 불러오기·저장 */
     val layouts by lazy { LayoutRepository(api) }
 
+    /** #16: 데모 로그인 + 배치 초기화 */
+    val demo by lazy { DemoRepository(auth, layouts) }
+
     private val _loggedOut = MutableSharedFlow<Unit>(extraBufferCapacity = 1)
 
     /** 사장님 API가 401 (토큰 없음·만료) → 토큰은 이미 지워짐, 로그인 화면으로 */

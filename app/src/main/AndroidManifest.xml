@@ -8,7 +8,8 @@
     <!-- #22: QR을 사진에 저장. Android 10+는 권한 없이 MediaStore로 저장 -->
     <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" android:maxSdkVersion="28" />
     <uses-feature android:name="android.hardware.camera" android:required="true" />
-    <uses-feature android:name="android.hardware.camera.ar" android:required="true" />
+    <!-- #16: ARCore 선택. 미지원 기기에도 설치되고 스캔만 막음 (데모 배치로 나머지 흐름은 동작) -->
+    <uses-feature android:name="android.hardware.camera.ar" android:required="false" />
 
     <!-- #11: release는 HTTPS만. Android 8.1 이하는 기본이 HTTP 허용이라 명시적으로 막음
          (debug는 networkSecurityConfig가 있으면 이 속성은 무시되어 개발 서버 HTTP 허용) -->
@@ -23,7 +24,7 @@
         android:supportsRtl="true"
         android:theme="@style/Theme.JariIsseo"
         tools:targetApi="31">
-        <meta-data android:name="com.google.ar.core" android:value="required" />
+        <meta-data android:name="com.google.ar.core" android:value="optional" />
         <provider
             android:name="androidx.core.content.FileProvider"
             android:authorities="${applicationId}.fileprovider"

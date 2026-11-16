@@ -1,0 +1,60 @@
+{
+  "version": 3,
+  "unit": "m",
+  "floors": [
+    {
+      "id": "f-1a2b", "name": "1층", "order": 0,
+      "floor": { "polygon": [[0, 0], [8, 0], [8, 3.5], [5.5, 3.5], [5.5, 6], [0, 6]] },
+      "walls": [
+        {"id": "w1", "from": [0, 0], "to": [8, 0]},
+        {"id": "w2", "from": [0, 0], "to": [0, 6]}
+      ],
+      "tables": [
+        {"id": "t-3f9a", "name": "1번", "x": 1.5, "z": 1.6, "width": 0.8, "depth": 0.8, "rotation": 0, "shape": "RECT"},
+        {"id": "t-8c21", "name": "2번", "x": 3.5, "z": 1.6, "width": 0.8, "depth": 0.8, "rotation": 0, "shape": "RECT"},
+        {"id": "t-b7e0", "name": "3번", "x": 6.6, "z": 1.8, "width": 1.4, "depth": 0.7, "rotation": 90, "shape": "RECT"},
+        {"id": "t-d4k2", "name": "4번", "x": 1.5, "z": 4.6, "width": 0.8, "depth": 0.8, "rotation": 0, "shape": "RECT"},
+        {"id": "t-e5m7", "name": "5번", "x": 3.2, "z": 4.6, "width": 0.9, "depth": 0.9, "rotation": 0, "shape": "ROUND"},
+        {"id": "t-g2p4", "name": "6번", "x": 4.8, "z": 4.6, "width": 0.9, "depth": 0.9, "rotation": 0, "shape": "ROUND"}
+      ],
+      "chairs": [
+        {"id": "c-81b2", "x": 0.75, "z": 1.6},
+        {"id": "c-81b3", "x": 2.25, "z": 1.6},
+        {"id": "c-92a1", "x": 2.75, "z": 1.6},
+        {"id": "c-92a2", "x": 4.25, "z": 1.6},
+        {"id": "c-a3b1", "x": 6.0, "z": 1.4},
+        {"id": "c-a3b2", "x": 6.0, "z": 2.2},
+        {"id": "c-a3b3", "x": 7.2, "z": 1.4},
+        {"id": "c-a3b4", "x": 7.2, "z": 2.2},
+        {"id": "c-b4c1", "x": 1.5, "z": 3.85},
+        {"id": "c-b4c2", "x": 1.5, "z": 5.35},
+        {"id": "c-c5d1", "x": 3.2, "z": 3.85},
+        {"id": "c-d6e1", "x": 4.8, "z": 5.35}
+      ]
+    },
+    {
+      "id": "f-7c3d", "name": "2층", "order": 1,
+      "floor": { "polygon": [[0, 0], [7, 0], [7, 5], [0, 5]] },
+      "walls": [],
+      "tables": [
+        {"id": "t-h8q1", "name": "7번", "x": 1.5, "z": 1.5, "width": 0.8, "depth": 0.8, "rotation": 0, "shape": "RECT"},
+        {"id": "t-j9r3", "name": "8번", "x": 3.5, "z": 1.5, "width": 0.8, "depth": 0.8, "rotation": 0, "shape": "RECT"},
+        {"id": "t-k1s5", "name": "9번", "x": 5.5, "z": 1.5, "width": 0.8, "depth": 0.8, "rotation": 0, "shape": "RECT"},
+        {"id": "t-m3t7", "name": "10번", "x": 2.0, "z": 3.6, "width": 1.6, "depth": 0.8, "rotation": 0, "shape": "RECT"},
+        {"id": "t-n5u9", "name": "11번", "x": 5.0, "z": 3.6, "width": 1.6, "depth": 0.8, "rotation": 0, "shape": "RECT"}
+      ],
+      "chairs": [
+        {"id": "c-e7f1", "x": 0.75, "z": 1.5},
+        {"id": "c-e7f2", "x": 2.25, "z": 1.5},
+        {"id": "c-f8g1", "x": 3.5, "z": 0.75},
+        {"id": "c-g9h1", "x": 5.5, "z": 2.25},
+        {"id": "c-h1i1", "x": 1.5, "z": 2.85},
+        {"id": "c-h1i2", "x": 2.5, "z": 2.85},
+        {"id": "c-h1i3", "x": 1.5, "z": 4.35},
+        {"id": "c-h1i4", "x": 2.5, "z": 4.35},
+        {"id": "c-i2j1", "x": 4.5, "z": 4.35},
+        {"id": "c-i2j2", "x": 5.5, "z": 4.35}
+      ]
+    }
+  ]
+}

@@ -28,6 +28,12 @@ class LayoutRepository(private val api: JariApi) {
         return (saved.floors.firstOrNull { it.id == pending.floorId } ?: pending.layout.floors.first { it.id == pending.floorId }).toLayout()
     }
 
+    /** #16: 모든 층을 이 배치로 바꾸고 테이블 상태도 모두 빈자리로 (데모 계정 초기화) */
+    suspend fun resetTo(layout: LayoutDto) {
+        apiCall { api.saveLayout(layout) }
+        apiCall { api.resetStatuses() }
+    }
+
     suspend fun rename(floorId: String, name: String) = update { it.renameFloor(floorId, name) }
 
     suspend fun move(floorId: String, up: Boolean) = update { it.moveFloor(floorId, up) }
