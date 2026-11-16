@@ -2,6 +2,7 @@ package com.jariisseo.android
 
 import kotlin.math.abs
 import kotlin.math.cos
+import kotlin.math.hypot
 import kotlin.math.sin
 import kotlin.random.Random
 
@@ -132,15 +133,72 @@ fun rotateLayout(layout: Layout, degrees: Float): Layout {
     }
     val chairs = layout.chairs.map { c -> val (x, z) = rot(c.x to c.z); c.copy(x = x, z = z) }
 
-    val points = floor + walls.flatMap { listOf(it.first, it.second) } + tables.map { it.x to it.z } + chairs.map { it.x to it.z }
+    return normalizeOrigin(layout.copy(floor = floor, walls = walls, tables = tables, chairs = chairs))
+}
+
+/** 바닥·벽·가구의 최소점이 (0, 0)이 되도록 이동 (서버 좌표 0~100m, StoreFrame과 같은 "0 이상" 규칙) */
+fun normalizeOrigin(layout: Layout): Layout {
+    val points = layout.floor + layout.walls.flatMap { listOf(it.first, it.second) } +
+        layout.tables.map { it.x to it.z } + layout.chairs.map { it.x to it.z }
     if (points.isEmpty()) return layout
     val ox = points.minOf { it.first }
     val oz = points.minOf { it.second }
     fun shift(p: Pair<Float, Float>) = (p.first - ox) to (p.second - oz)
     return layout.copy(
-        floor = floor.map(::shift),
-        walls = walls.map { shift(it.first) to shift(it.second) },
-        tables = tables.map { it.copy(x = it.x - ox, z = it.z - oz) },
-        chairs = chairs.map { it.copy(x = it.x - ox, z = it.z - oz) },
+        floor = layout.floor.map(::shift),
+        walls = layout.walls.map { shift(it.first) to shift(it.second) },
+        tables = layout.tables.map { it.copy(x = it.x - ox, z = it.z - oz) },
+        chairs = layout.chairs.map { it.copy(x = it.x - ox, z = it.z - oz) },
     )
 }
+
+// ── #26: 바닥 모양(꼭짓점) 편집. 벽은 항상 바닥 각 변 (스캔 결과와 같은 규칙, #40) ──
+
+private fun Layout.withFloor(floor: List<Pair<Float, Float>>) = copy(floor = floor, walls = CornerOutline.edges(floor))
+
+fun moveFloorPoint(layout: Layout, i: Int, x: Float, z: Float): Layout =
+    layout.withFloor(layout.floor.mapIndexed { k, p -> if (k == i) x to z else p })
+
+/** 변 edge(꼭짓점 edge → edge+1)의 가운데에 꼭짓점 추가 */
+fun addFloorPoint(layout: Layout, edge: Int): Layout {
+    val f = layout.floor
+    val a = f[edge]
+    val b = f[(edge + 1) % f.size]
+    val mid = (a.first + b.first) / 2 to (a.second + b.second) / 2
+    return layout.withFloor(f.subList(0, edge + 1) + mid + f.subList(edge + 1, f.size))
+}
+
+/** 꼭짓점 삭제 (3개 이하면 그대로) */
+fun removeFloorPoint(layout: Layout, i: Int): Layout =
+    if (layout.floor.size <= 3) layout else layout.withFloor(layout.floor.filterIndexed { k, _ -> k != i })
+
+/** (x, z)에서 slop(m) 안의 가장 가까운 꼭짓점 */
+fun hitFloorPoint(layout: Layout, x: Float, z: Float, slop: Float): Int? =
+    layout.floor.indices
+        .map { it to hypot(layout.floor[it].first - x, layout.floor[it].second - z) }
+        .filter { it.second <= slop }
+        .minByOrNull { it.second }?.first
+
+/** (x, z)에서 slop(m) 안의 가장 가까운 변 가운데 → 그 변 번호 */
+fun hitFloorEdgeMid(layout: Layout, x: Float, z: Float, slop: Float): Int? =
+    floorEdgeMids(layout).withIndex()
+        .map { it.index to hypot(it.value.first - x, it.value.second - z) }
+        .filter { it.second <= slop }
+        .minByOrNull { it.second }?.first
+
+/** 각 변의 가운데 (변 i = 꼭짓점 i → i+1) */
+fun floorEdgeMids(layout: Layout): List<Pair<Float, Float>> =
+    if (layout.floor.size < 3) emptyList()
+    else CornerOutline.edges(layout.floor).map { (a, b) -> (a.first + b.first) / 2 to (a.second + b.second) / 2 }
+
+/** 저장할 수 없는 바닥이면 그 이유 (서버 검증과 같은 규칙) */
+fun floorError(layout: Layout): String? = when {
+    layout.floor.size < 3 -> "바닥 꼭짓점이 3개 이상 필요해요"
+    !FloorPolygon.isSimple(layout.floor) -> "바닥 선이 서로 겹치거나 교차해요"
+    else -> null
+}
+
+/** 중심이 바닥 밖인 테이블 id */
+fun tablesOutsideFloor(layout: Layout): Set<String> =
+    if (layout.floor.size < 3) emptySet()
+    else layout.tables.filterNot { FloorPolygon.contains(layout.floor, it.x, it.z) }.map { it.id }.toSet()
