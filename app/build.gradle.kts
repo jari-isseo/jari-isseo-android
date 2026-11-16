@@ -14,8 +14,8 @@ val localProps = Properties().apply {
     if (f.exists()) f.inputStream().use { load(it) }
 }
 val devServerUrl: String = localProps.getProperty("devServerUrl")?.trim() ?: "http://10.0.2.2:8080/"
-// #53: 운영 서버. TODO(server#26): HTTPS 적용 후 https:// 로 바꾸고 release network_security_config 제거
-val releaseServerUrl = "http://jariisseo.mingu.cloud/"
+// #53: 운영 서버. #57: HTTPS 적용됨 (http://는 301 → OkHttp가 POST를 GET으로 바꾸므로 반드시 https)
+val releaseServerUrl = "https://jariisseo.mingu.cloud/"
 // #17: debug에서 local.properties에 viewerSample=true면 사장님 뷰가 실제 매장(/s/{publicId}) 대신 샘플 뷰어를 엶
 //   (손님 웹 페이지는 server#16 전이라 없음). release는 항상 실제 매장
 val viewerSample: Boolean = localProps.getProperty("viewerSample")?.trim()?.toBoolean() ?: false   // properties는 값 뒤 공백을 남김

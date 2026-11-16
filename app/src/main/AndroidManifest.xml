@@ -10,9 +10,8 @@
     <uses-feature android:name="android.hardware.camera" android:required="true" />
     <uses-feature android:name="android.hardware.camera.ar" android:required="true" />
 
-    <!-- #11: 기본은 HTTPS만. Android 8.1 이하는 기본이 HTTP 허용이라 명시적으로 막음
-         (debug·release는 networkSecurityConfig가 있으면 이 속성은 무시됨.
-          debug: 개발 서버 HTTP 허용 / release(#53): 운영 서버 도메인만 HTTP 허용) -->
+    <!-- #11: release는 HTTPS만. Android 8.1 이하는 기본이 HTTP 허용이라 명시적으로 막음
+         (debug는 networkSecurityConfig가 있으면 이 속성은 무시되어 개발 서버 HTTP 허용) -->
     <application
         android:allowBackup="true"
         android:usesCleartextTraffic="false"
