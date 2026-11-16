@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- #53: release 전용. 운영 서버가 아직 HTTP라 그 도메인만 cleartext 허용, 나머지는 HTTPS만
+     TODO(server#26): HTTPS 적용 후 이 파일과 release/AndroidManifest.xml 제거 -->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="false" />
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="false">jariisseo.mingu.cloud</domain>
+    </domain-config>
+</network-security-config>
