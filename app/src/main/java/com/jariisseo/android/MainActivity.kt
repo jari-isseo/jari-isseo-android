@@ -87,6 +87,7 @@ import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
@@ -102,8 +103,9 @@ class MainActivity : ComponentActivity() {
 
     private var session: Session? = null          // ARCore 엔진. 처음엔 없음(null)
     private var installRequested = false          // AR 서비스 설치 화면을 이미 띄웠는지
-    // #16: ARCore를 쓸 수 없는 기기면 false → 홈에서 스캔 입구를 막음. 확인 중·알 수 없음은 true (스캔 시 다시 확인됨)
-    private var arSupported by mutableStateOf(true)
+    // #16: ARCore 지원 여부. 지원(SUPPORTED)으로 확인된 뒤에만 스캔 허용 (optional 앱은 확인 후에만 requestInstall)
+    private var arSupport by mutableStateOf(ArSupport.CHECKING)
+    private var arCheck: Job? = null
 
     // #10: AR(카메라·인식)은 스캔 화면이 보이고 액티비티가 resume 상태일 때만 동작
     private var scanVisible = false
@@ -188,7 +190,8 @@ class MainActivity : ComponentActivity() {
                             scannedTarget = target
                         }
                     },
-                    scanSupported = arSupported,
+                    arSupport = arSupport,
+                    onRecheckAr = ::checkArAvailability,
                     // #42: 로그아웃·401 → 보정 중인 배치와 스캔 기록(벽·가구) 모두 지움
                     onSessionEnd = {
                         editLayout = null
@@ -207,17 +210,23 @@ class MainActivity : ComponentActivity() {
     }
 
     /**
-     * #16: ARCore 지원 여부. 처음엔 확인 중(transient)일 수 있어서 끝날 때까지 다시 확인.
-     * 기기 자체가 미지원(UNSUPPORTED_DEVICE_NOT_CAPABLE)일 때만 막음 (설치 안 됨·버전 낮음은 스캔 때 설치 화면)
+     * #16: ARCore 지원 여부 확인. 확인 중(transient)이면 끝날 때까지 다시 확인. 이미 확인 중이면 그대로 둠.
+     * 지원(설치 안 됨·버전 낮음 포함 → 스캔 때 설치 화면) / 기기 미지원 / 알 수 없음(네트워크 등 → 홈에서 다시 확인)
      */
     private fun checkArAvailability() {
-        lifecycleScope.launch {
+        if (arCheck?.isActive == true) return
+        arSupport = ArSupport.CHECKING
+        arCheck = lifecycleScope.launch {
             var availability = ArCoreApk.getInstance().checkAvailability(this@MainActivity)
             while (availability.isTransient) {
                 delay(200)
                 availability = ArCoreApk.getInstance().checkAvailability(this@MainActivity)
             }
-            arSupported = availability != ArCoreApk.Availability.UNSUPPORTED_DEVICE_NOT_CAPABLE
+            arSupport = when {
+                availability.isSupported -> ArSupport.SUPPORTED
+                availability == ArCoreApk.Availability.UNSUPPORTED_DEVICE_NOT_CAPABLE -> ArSupport.UNSUPPORTED
+                else -> ArSupport.UNKNOWN
+            }
         }
     }
 

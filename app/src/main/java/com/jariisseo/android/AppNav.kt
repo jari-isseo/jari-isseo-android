@@ -40,6 +40,9 @@ object Route {
     const val FLOOR_ADD = "floor-add"   // #25: 새 층 이름 → 스캔
 }
 
+/** #16: ARCore 지원 여부. SUPPORTED일 때만 스캔 */
+enum class ArSupport { CHECKING, SUPPORTED, UNSUPPORTED, UNKNOWN }
+
 /**
  * #10: 로그인 → 홈 → 스캔 → 보정 → 뷰.
  * 스캔 화면은 AR 객체를 가진 MainActivity가 그려서 넘김 (onClose = 홈으로, onDone = [스캔 완료]).
@@ -55,7 +58,8 @@ fun AppNav(
     target: FloorTarget?,
     onTargetChange: (FloorTarget) -> Unit,
     onSelectFloor: (target: FloorTarget, scan: Boolean) -> Unit,
-    scanSupported: Boolean,   // #16: false = ARCore 미지원 기기 → 홈에서 스캔 입구를 막음
+    arSupport: ArSupport,        // #16: SUPPORTED가 아니면 홈에서 스캔 입구를 막고, 스캔 화면에 와도 홈으로
+    onRecheckAr: () -> Unit,     // #16: 알 수 없음이면 다시 확인
     onSessionEnd: () -> Unit,
 ) {
     val nav = rememberNavController()
@@ -118,7 +122,8 @@ fun AppNav(
                 onAddFloor = { nav.navigate(Route.FLOOR_ADD) { launchSingleTop = true } },
                 onStore = { nav.navigate(Route.STORE) { launchSingleTop = true } },
                 onShare = { nav.navigate(Route.SHARE) { launchSingleTop = true } },
-                scanSupported = scanSupported,
+                arSupport = arSupport,
+                onRecheckAr = onRecheckAr,
             )
         }
         composable(Route.FLOOR_ADD) {
@@ -139,8 +144,9 @@ fun AppNav(
         }
         // #25: 액티비티가 다시 만들어지면(설정 변경·프로세스 종료) 작업 중인 층을 잃음 → 스캔·보정할 층이 없으니 홈으로
         //   (저장 안 한 스캔 결과는 원래도 이때 사라짐. 기존 층은 홈에서 다시 [보정])
+        // #16: AR 지원이 확인되지 않았으면 홈으로 (층 추가 화면 등 다른 길로 와도 막힘)
         composable(Route.SCAN) {
-            if (target == null) {
+            if (target == null || arSupport != ArSupport.SUPPORTED) {
                 LaunchedEffect(Unit) { nav.popBackStack(Route.HOME, inclusive = false) }
                 return@composable
             }

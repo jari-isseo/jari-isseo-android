@@ -85,7 +85,7 @@ fun FloorSheet(
             Text("테이블 ${floor.tables.size}개", Modifier.padding(start = 24.dp, end = 24.dp, top = 4.dp, bottom = 8.dp), fontSize = 14.sp, color = Sub)
             SheetAction("보정", enabled = !busy, onClick = onEdit)
             SheetAction(
-                if (scanSupported) "다시 스캔" else "다시 스캔 (이 기기는 AR 스캔을 지원하지 않아요)",
+                if (scanSupported) "다시 스캔" else "다시 스캔 (지금은 AR 스캔을 쓸 수 없어요)",
                 enabled = !busy && scanSupported,
                 onClick = onRescan,
             )
