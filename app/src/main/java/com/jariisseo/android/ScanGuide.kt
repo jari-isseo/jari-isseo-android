@@ -3,7 +3,7 @@ package com.jariisseo.android
 /** #9: 사장님용 스캔 안내 (추적 실패 이유·완료 조건·재촬영 안내) */
 
 /** 추적 상태 (ARCore TrackingState + TrackingFailureReason을 화면용으로 줄인 것) */
-enum class TrackingIssue { NONE, INITIALIZING, DARK, FAST, FEATURELESS, STOPPED }
+enum class TrackingIssue { NONE, INITIALIZING, DARK, FAST, FEATURELESS, STOPPED, RESTART }
 
 /** 이만큼 지났는데 확정 테이블이 없으면 '천천히 한 바퀴 더' 안내 */
 const val SLOW_LAP_MS = 3 * 60_000L
@@ -16,6 +16,7 @@ fun trackingGuide(issue: TrackingIssue): String? = when (issue) {
     TrackingIssue.FAST -> "조금 천천히 움직여 주세요"
     TrackingIssue.FEATURELESS -> "흰 벽·유리 말고 무늬 있는 곳을 비춰 주세요"
     TrackingIssue.STOPPED -> "위치를 놓쳤어요 · 처음 위치로 돌아가 천천히 비춰 주세요"
+    TrackingIssue.RESTART -> "카메라에 문제가 있어요 · 스캔 화면을 나갔다 다시 들어와 주세요"
 }
 
 private fun confirmedTables(state: ArUiState) = state.mapItems.count { it.confirmed && it.label == "테이블" }

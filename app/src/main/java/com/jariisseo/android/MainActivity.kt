@@ -220,11 +220,19 @@ class MainActivity : ComponentActivity() {
         LaunchedEffect(Unit) {
             lifecycle.repeatOnLifecycle(Lifecycle.State.RESUMED) {
                 var last = SystemClock.elapsedRealtime()
-                while (true) {
-                    delay(1000)
+                // 1초마다 더하고, 멈출 때(화면 나감·pause) 마지막 틱 이후 남은 시간도 더함
+                fun addElapsed() {
                     val now = SystemClock.elapsedRealtime()
                     scanElapsedMs += now - last
                     last = now
+                }
+                try {
+                    while (true) {
+                        delay(1000)
+                        addElapsed()
+                    }
+                } finally {
+                    addElapsed()
                 }
             }
         }

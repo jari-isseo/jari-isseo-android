@@ -43,7 +43,6 @@ data class ArUiState(
     val lastDistanceM: Float? = null,
     val message: String = "바닥이나 벽을 비춘 뒤 화면을 탭하세요",
     val boxes: List<ScreenBox> = emptyList(),     // 8교시: 인식 박스
-    val detectInfo: String = "",                  // 8교시: 추론 시간 등
     // 9교시: 탑뷰 배치도 (#6: 매장 좌표, 미터, 0 이상. 가장 긴 벽이 x축과 평행)
     val mapItems: List<MapItem> = emptyList(),
     val cameraX: Float = 0f,
@@ -101,7 +100,7 @@ class ArRenderer(
     private val detecting = AtomicBoolean(false)          // 추론 중이면 새 프레임은 건너뜀
     @Volatile private var latestDetections: List<Detection> = emptyList()
     @Volatile private var detectionGeneration = 0         // 9교시: 새 결과가 나올 때마다 +1
-    @Volatile private var detectInfo = if (detector == null) "인식기 없음" else "인식 준비 중..."
+    @Volatile private var detectError: String? = null      // #9: 추론 오류 (다음 추론이 성공하면 지움)
     private var lastDetectTimestamp = 0L
     private val cornerIn = FloatArray(4)
     private val cornerOut = FloatArray(4)
@@ -225,6 +224,7 @@ class ArRenderer(
                 mapObjects.clear()
                 resetMap()                                  // #4·#5: 누적한 바닥·벽도 초기화
                 resetWalls()                                // #38: 기록한 벽도
+                detectError = null                          // #9: 지난 스캔의 인식 오류도
                 clearRequested = false
                 message = "점과 배치도를 모두 지웠어요"
             }
@@ -369,9 +369,10 @@ class ArRenderer(
                 if (startStage != stage) return@execute   // #40: 추론 중 단계가 바뀜 ([벽 다시] 등) → 버림
                 latestDetections = result
                 detectionGeneration++      // GL 스레드에 "새 결과 있음" 알림 (이 스레드만 씀)
-                detectInfo = "추론 ${detector.lastInferenceMs}ms · 물체 ${result.size}개 · 좌표 ${detector.coordMode}"
+                detectError = null
             } catch (e: Exception) {
-                detectInfo = "인식 오류: ${e.javaClass.simpleName} ${e.message}"
+                Log.e(TAG, "인식 오류", e)
+                detectError = "가구 인식이 잘 안 돼요 · 앱을 다시 켜 주세요"
             } finally {
                 detecting.set(false)
             }
@@ -533,7 +534,7 @@ class ArRenderer(
             lastDistanceM = lastDistance,
             message = message,
             boxes = if (outline != null) latestDetections.map { toView(frame, it) } else emptyList(),
-            detectInfo = detectInfo,
+            error = detectError.takeIf { outline != null },   // #9: 가구 단계에서만 (벽 단계는 인식 안 함)
             mapItems = items.map {
                 val (x, z) = store.point(it.x() to it.z())
                 MapItem(it.label, x, z, it.count, confirmed = it.count >= CONFIRM_COUNT)
@@ -746,6 +747,8 @@ class ArRenderer(
             TrackingFailureReason.INSUFFICIENT_LIGHT -> TrackingIssue.DARK
             TrackingFailureReason.EXCESSIVE_MOTION -> TrackingIssue.FAST
             TrackingFailureReason.INSUFFICIENT_FEATURES -> TrackingIssue.FEATURELESS
+            // #9: 내부 오류·카메라 사용 불가는 움직여도 안 풀림 → 다시 시작 안내
+            TrackingFailureReason.BAD_STATE, TrackingFailureReason.CAMERA_UNAVAILABLE -> TrackingIssue.RESTART
             else -> TrackingIssue.INITIALIZING
         }
         TrackingState.STOPPED -> TrackingIssue.STOPPED

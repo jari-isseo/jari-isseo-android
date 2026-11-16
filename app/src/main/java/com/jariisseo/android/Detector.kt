@@ -2,7 +2,6 @@ package com.jariisseo.android
 
 import android.content.Context
 import android.media.Image
-import android.os.SystemClock
 import org.tensorflow.lite.Interpreter
 import java.io.FileInputStream
 import java.nio.ByteBuffer
@@ -64,10 +63,6 @@ class Detector(context: Context) {
     // 출력: [1, 84, 2100] → 84 = 박스 4개 값(cx, cy, w, h) + 클래스 80개 점수, 2100 = 후보 박스 수
     private val output = Array(1) { Array(84) { FloatArray(NUM_CANDIDATES) } }
 
-    var lastInferenceMs = 0L
-        private set
-    var coordMode = "?"   // 모델 출력 좌표가 0~1(정규화)인지 0~320(픽셀)인지
-        private set
 
     fun describe(): String {
         val input = interpreter.getInputTensor(0)
@@ -88,9 +83,7 @@ class Detector(context: Context) {
         // ② 추론
         inputBuffer.rewind()
         inputBuffer.asFloatBuffer().put(inputPixels)
-        val start = SystemClock.elapsedRealtime()
         interpreter.run(inputBuffer, output)
-        lastInferenceMs = SystemClock.elapsedRealtime() - start
 
         // ③ 후처리: 후보 2100개 → 점수 필터 → 중복 제거(NMS) → 카메라 이미지 좌표로 되돌리기
         return postprocess(frame, scale, padX, padY)
@@ -132,7 +125,6 @@ class Detector(context: Context) {
         var maxW = 0f
         for (i in 0 until NUM_CANDIDATES) maxW = max(maxW, out[2][i])
         val coordScale = if (maxW <= 2f) SIZE.toFloat() else 1f
-        coordMode = if (coordScale == 1f) "픽셀" else "정규화"
 
         val candidates = mutableListOf<Detection>()
         for (i in 0 until NUM_CANDIDATES) {
