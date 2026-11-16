@@ -10,8 +10,8 @@ const val TABLE_SIZE_M = 0.8f   // 아직 실측하지 않아 고정 (샘플의 
 const val TABLE_SIZE_MIN = 0.3f  // 서버 검증 규칙 (크기 0.3~3m)
 const val TABLE_SIZE_MAX = 3f
 
-/** 접두사 + 랜덤 4자리, used에 없는 ID */
-private fun newId(prefix: String, used: Set<String>, random: Random): String {
+/** 접두사 + 랜덤 4자리, used에 없는 ID (#25: 층 합치기에서도 씀) */
+internal fun newId(prefix: String, used: Set<String>, random: Random): String {
     while (true) {
         val id = prefix + (1..4).map { ID_CHARS[random.nextInt(ID_CHARS.length)] }.joinToString("")
         if (id !in used) return id

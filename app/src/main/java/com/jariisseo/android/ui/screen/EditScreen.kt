@@ -52,6 +52,7 @@ import com.jariisseo.android.TABLE_SIZE_MIN
 import com.jariisseo.android.TableItem
 import com.jariisseo.android.addTable
 import com.jariisseo.android.net.ApiException
+import com.jariisseo.android.net.FloorTarget
 import com.jariisseo.android.net.Server
 import com.jariisseo.android.net.displayMessage
 import com.jariisseo.android.normalizeDegrees
@@ -83,9 +84,17 @@ import kotlinx.coroutines.launch
  * #15: [저장] = 서버에 업로드 (다른 층은 그대로 두고 이 층만 교체). 다시 스캔한 층이면 상태 초기화 확인 후 저장.
  *   들어왔을 때 보정할 배치가 없으면(layout = null) 서버 배치를 불러와 기존 테이블 ID 그대로 다시 보정.
  * 벽 맞추기(방 외곽선 꼭짓점)는 #26
+ * #25: 층 단위 (floorTarget). 기존 층은 그 층만 불러오고 교체, 새 층은 첫 저장 때 서버에 생김 → 이후엔 기존 층으로
  */
 @Composable
-fun EditScreen(layout: Layout?, onChange: (Layout) -> Unit, onBack: () -> Unit, onSaved: () -> Unit) {
+fun EditScreen(
+    layout: Layout?,
+    onChange: (Layout) -> Unit,
+    floorTarget: FloorTarget?,
+    onTargetChange: (FloorTarget) -> Unit,
+    onBack: () -> Unit,
+    onSaved: () -> Unit,
+) {
     var target by remember { mutableIntStateOf(0) }   // 0 = 테이블 옮기기, 1 = 벽 맞추기 (방 외곽선 꼭짓점, #26)
     // 되돌리기: 편집 한 번(끌기 1회, 시트 1회, 회전 1회) 전의 배치. 새 스캔이면 비움
     var history by remember(layout?.floorId) { mutableStateOf(listOf<Layout>()) }
@@ -109,9 +118,13 @@ fun EditScreen(layout: Layout?, onChange: (Layout) -> Unit, onBack: () -> Unit, 
 
     // 보정할 배치가 없으면 서버 배치를 불러옴 (저장 안 한 로컬 편집이 있으면 그걸 그대로 씀)
     LaunchedEffect(Unit) {
-        if (layout != null) return@LaunchedEffect
+        val existing = floorTarget as? FloorTarget.Existing
+        if (layout != null || existing == null) {
+            loading = false
+            return@LaunchedEffect
+        }
         try {
-            Server.layouts.load()?.let(onChange)
+            Server.layouts.load(existing.id)?.let(onChange)
         } catch (e: ApiException) {
             message = e.displayMessage()
         } finally {
@@ -122,16 +135,20 @@ fun EditScreen(layout: Layout?, onChange: (Layout) -> Unit, onBack: () -> Unit, 
     // checkReset = true면 먼저 초기화 확인이 필요한지 보고, 필요하면 확인 창만 띄우고 멈춤
     fun save(checkReset: Boolean) {
         val current = layout ?: return
+        val t = floorTarget ?: return
         if (saving) return
         saving = true
         message = null
         scope.launch {
             try {
-                if (checkReset && Server.layouts.resetsStatus(current)) {
+                if (checkReset && Server.layouts.resetsStatus(current, t)) {
                     confirmReset = true   // [바꾸기]면 save(false), [취소]면 저장 안 함
                     return@launch
                 }
-                onChange(Server.layouts.save(current))
+                val saved = Server.layouts.save(current, t)
+                onChange(saved)
+                // 새 층은 이제 서버에 있음 → 다시 저장해도 또 추가되지 않게
+                onTargetChange(FloorTarget.Existing(saved.floorId, t.name))
                 onSaved()
             } catch (e: ApiException) {
                 message = e.displayMessage()
@@ -183,7 +200,7 @@ fun EditScreen(layout: Layout?, onChange: (Layout) -> Unit, onBack: () -> Unit, 
         ) {
             Column {
                 PageTitle(
-                    "1층 배치 보정",
+                    floorTarget?.let { "${it.name} 배치 보정" } ?: "배치 보정",
                     when {
                         rotateBase != null -> "매장 입구가 화면 아래쪽에 오도록 돌려 주세요"
                         target == 0 -> "끌어서 이동 · 탭해서 편집 · 길게 눌러 삭제"

@@ -47,17 +47,92 @@ class LayoutRepositoryTest {
     fun load_notFound_isNull() = runTest {
         server.enqueue(json(404, """{"code":"LAYOUT_NOT_FOUND","message":"아직 저장된 배치가 없어요"}"""))
 
-        assertNull(repo.load())
+        assertNull(repo.load("f-aaaa"))
+    }
+
+    /** #25: 고른 층 (순서가 첫 층이 아니어도) */
+    @Test
+    fun load_returnsThatFloor() = runTest {
+        server.enqueue(json(200, serverJson))
+
+        val layout = repo.load("f-bbbb")!!
+
+        assertEquals("f-bbbb", layout.floorId)
+        assertEquals(listOf("t-9999"), layout.tables.map { it.id })
+    }
+
+    /** #25: 층 목록은 order 순, 배치가 없으면 빈 목록 */
+    @Test
+    fun floors_sortedByOrder_orEmpty() = runTest {
+        server.enqueue(json(200, serverJson))
+        server.enqueue(json(404, """{"code":"LAYOUT_NOT_FOUND","message":"아직 저장된 배치가 없어요"}"""))
+
+        assertEquals(listOf("1층", "2층"), repo.floors().map { it.name })
+        assertEquals(emptyList<FloorDto>(), repo.floors())
+    }
+
+    /** #25: 새 층 저장 → PUT에 기존 2개 층 + 새 층, 반환은 서버에 생긴 그 층 */
+    @Test
+    fun save_newFloor_appendsThirdFloor() = runTest {
+        val newFloor = Layout("f-cccc", listOf(0f to 0f, 2f to 0f, 2f to 2f), emptyList(), listOf(TableItem("t-3333", "1번", 1f, 1f)), emptyList())
+        server.enqueue(json(200, serverJson))
+        server.enqueue(
+            json(
+                200,
+                serverJson.replace(
+                    "\n]}",
+                    """,{"id":"f-cccc","name":"루프탑","order":2,"floor":{"polygon":[[0,0],[2,0],[2,2]]},"walls":[],"tables":[{"id":"t-3333","name":"1번","x":1,"z":1}],"chairs":[]}
+]}""",
+                ),
+            ),
+        )
+
+        val saved = repo.save(newFloor, FloorTarget.New("루프탑"))
+
+        server.takeRequest()
+        val body = server.takeRequest().body.readUtf8()
+        assertTrue(body.contains("\"f-aaaa\"") && body.contains("\"f-bbbb\"") && body.contains("\"f-cccc\""))
+        assertTrue(body.contains("\"name\":\"루프탑\"") && body.contains("\"order\":2"))
+        assertEquals("f-cccc", saved.floorId)
     }
 
     @Test
-    fun load_returnsCurrentFloor() = runTest {
+    fun remove_putsWithoutThatFloor() = runTest {
+        server.enqueue(json(200, serverJson))
         server.enqueue(json(200, serverJson))
 
-        val layout = repo.load()!!
+        repo.remove("f-bbbb")
 
-        assertEquals("f-aaaa", layout.floorId)
-        assertEquals(listOf("t-1111"), layout.tables.map { it.id })
+        server.takeRequest()
+        val body = server.takeRequest().body.readUtf8()
+        assertTrue(body.contains("\"f-aaaa\"") && !body.contains("\"f-bbbb\""))
+    }
+
+    @Test
+    fun move_swapsOrders() = runTest {
+        server.enqueue(json(200, serverJson))
+        server.enqueue(json(200, serverJson))
+
+        repo.move("f-bbbb", up = true)
+
+        server.takeRequest()
+        val body = server.takeRequest().body.readUtf8()
+        // f-bbbb(2층)가 order 0, f-aaaa(1층)가 order 1
+        assertTrue(body.contains("\"id\":\"f-bbbb\",\"name\":\"2층\",\"order\":0"))
+        assertTrue(body.contains("\"id\":\"f-aaaa\",\"name\":\"1층\",\"order\":1"))
+    }
+
+    @Test
+    fun remove_lastFloor_throwsApiException_withoutPut() = runTest {
+        server.enqueue(json(200, """{"version":1,"unit":"m","floors":[{"id":"f-aaaa","name":"1층","order":0,"floor":{"polygon":[[0,0],[1,0],[1,1]]}}]}"""))
+
+        try {
+            repo.remove("f-aaaa")
+            fail()
+        } catch (e: ApiException) {
+            assertEquals("LAST_FLOOR", e.code)
+        }
+        assertEquals(1, server.requestCount)
     }
 
     private val edited = Layout(
@@ -70,7 +145,7 @@ class LayoutRepositoryTest {
         server.enqueue(json(200, serverJson))   // 저장 직전 최신 서버 배치
         server.enqueue(json(200, serverJson))   // PUT 응답
 
-        repo.save(edited)
+        repo.save(edited, FloorTarget.Existing("f-aaaa", "1층"))
 
         server.takeRequest()   // GET
         val put = server.takeRequest()
@@ -88,8 +163,8 @@ class LayoutRepositoryTest {
         server.enqueue(json(200, serverJson.replace("\"t-9999\"", "\"t-8888\"")))   // save 직전 GET
         server.enqueue(json(200, serverJson))                                        // PUT 응답
 
-        repo.resetsStatus(edited)
-        repo.save(edited)
+        repo.resetsStatus(edited, FloorTarget.Existing("f-aaaa", "1층"))
+        repo.save(edited, FloorTarget.Existing("f-aaaa", "1층"))
 
         server.takeRequest()
         server.takeRequest()
@@ -103,7 +178,7 @@ class LayoutRepositoryTest {
         server.enqueue(json(400, """{"code":"INVALID_LAYOUT","message":"1층: 테이블 이름은 1~20자여야 해요"}"""))
 
         try {
-            repo.save(Layout("f-aaaa", emptyList(), emptyList(), emptyList(), emptyList()))
+            repo.save(Layout("f-aaaa", emptyList(), emptyList(), emptyList(), emptyList()), FloorTarget.New("1층"))
             fail()
         } catch (e: ApiException) {
             assertEquals("INVALID_LAYOUT", e.code)

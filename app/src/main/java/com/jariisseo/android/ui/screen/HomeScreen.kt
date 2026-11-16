@@ -1,6 +1,16 @@
 package com.jariisseo.android.ui.screen
 
+import android.widget.Toast
 import androidx.compose.foundation.background
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.ui.platform.LocalContext
+import com.jariisseo.android.net.FloorDto
+import com.jariisseo.android.net.FloorTarget
+import com.jariisseo.android.net.MAX_FLOORS
+import com.jariisseo.android.net.displayMessage
+import com.jariisseo.android.ui.PillTab
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -50,20 +60,60 @@ import com.jariisseo.android.ui.theme.SageInk
 import com.jariisseo.android.ui.theme.Sub
 
 /**
- * #10: 시안 D ④ 홈. 매장 이름·빈자리 수는 서버 연동 후, 층 목록은 #25, 공유는 #22에서 채움.
- * 지금은 "1층" 한 줄과 이동만 (가짜 숫자 대신 "-")
+ * #10: 시안 D ④ 홈. 빈자리 수는 서버 연동 후 (가짜 숫자 대신 "-")
  * #42: 제목 = 서버의 매장 이름 (불러오기 전·실패 시 "내 매장"). 가게 정보에서 돌아오면 다시 불러옴
  * #22: 오른쪽 위 [손님에게 알리기] → 공유 화면
+ * #25: 층 목록 = 서버 배치의 층 (이름 · 테이블 수). 행을 누르면 층 관리 시트, [+] = 층 추가 (10개까지)
  */
 @Composable
-fun HomeScreen(onView: () -> Unit, onEdit: () -> Unit, onScan: () -> Unit, onStore: () -> Unit, onShare: () -> Unit) {
+fun HomeScreen(
+    onView: () -> Unit,
+    onEditFloor: (FloorTarget) -> Unit,
+    onRescanFloor: (FloorTarget) -> Unit,
+    onAddFloor: () -> Unit,
+    onStore: () -> Unit,
+    onShare: () -> Unit,
+) {
+    val context = LocalContext.current
     var storeName by remember { mutableStateOf<String?>(null) }
+    var floorsAttempt by remember { mutableIntStateOf(0) }   // 층 관리 후·[다시 시도]마다 +1
+    var floors by remember { mutableStateOf<List<FloorDto>?>(null) }
+    var floorsError by remember { mutableStateOf<String?>(null) }
+    var managing by remember { mutableStateOf<FloorDto?>(null) }   // 관리 시트의 층
     LaunchedEffect(Unit) {
         // 401은 AuthInterceptor가 로그인으로 보냄, 그 밖의 실패는 "내 매장" 그대로
         try {
             storeName = apiCall { Server.api.myStore() }.name
         } catch (_: ApiException) {
         }
+    }
+    LaunchedEffect(floorsAttempt) {
+        floorsError = null
+        try {
+            floors = Server.layouts.floors()
+        } catch (e: ApiException) {
+            floorsError = e.displayMessage()
+        }
+    }
+    fun addFloor() {
+        if ((floors?.size ?: 0) >= MAX_FLOORS) {
+            Toast.makeText(context, "층은 ${MAX_FLOORS}개까지 만들 수 있어요", Toast.LENGTH_SHORT).show()
+        } else {
+            onAddFloor()
+        }
+    }
+
+    managing?.let { floor ->
+        val list = floors.orEmpty()
+        FloorSheet(
+            floor = floor,
+            index = list.indexOfFirst { it.id == floor.id },
+            count = list.size,
+            onDismiss = { managing = null },
+            onEdit = { managing = null; onEditFloor(FloorTarget.Existing(floor.id, floor.name)) },
+            onRescan = { managing = null; onRescanFloor(FloorTarget.Existing(floor.id, floor.name)) },
+            onChanged = { managing = null; floorsAttempt++ },
+        )
     }
 
     Box(Modifier.fillMaxSize().background(Bg)) {
@@ -105,8 +155,24 @@ fun HomeScreen(onView: () -> Unit, onEdit: () -> Unit, onScan: () -> Unit, onSto
             }
 
             Text("층", Modifier.padding(start = 24.dp, top = 28.dp, bottom = 10.dp), fontSize = 20.sp, fontWeight = FontWeight.Black)
-            Column(Modifier.padding(horizontal = 20.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                CardRow("1층", "아직 스캔하지 않았어요", onClick = onEdit)
+            // 하단 메뉴에 가리지 않게 아래 여백, 층이 많으면 스크롤
+            Column(
+                Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(start = 20.dp, end = 20.dp, bottom = 120.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                val list = floors
+                val error = floorsError
+                when {
+                    error != null -> Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                        Text("층을 불러오지 못했어요\n$error", fontSize = 14.sp, color = Sub)
+                        PillTab("다시 시도", selected = true) { floorsAttempt++ }
+                    }
+                    list == null -> Text("층을 불러오는 중…", fontSize = 14.sp, color = Sub)
+                    list.isEmpty() -> CardRow("첫 층 스캔하기", "아직 스캔한 층이 없어요", onClick = ::addFloor)
+                    else -> list.forEach { floor ->
+                        CardRow(floor.name, "테이블 ${floor.tables.size}개", onClick = { managing = floor })
+                    }
+                }
             }
         }
 
@@ -140,7 +206,7 @@ fun HomeScreen(onView: () -> Unit, onEdit: () -> Unit, onScan: () -> Unit, onSto
                 .clip(CircleShape)
                 .background(Brown)
                 .semantics { contentDescription = "층 추가하고 스캔하기" }
-                .clickable(onClick = onScan),
+                .clickable(onClick = ::addFloor),
             contentAlignment = Alignment.Center,
         ) { LineIcon(Glyph.PLUS, Color.White, size = 26.dp) }
     }
