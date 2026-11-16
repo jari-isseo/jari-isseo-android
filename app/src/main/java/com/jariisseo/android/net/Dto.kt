@@ -31,9 +31,12 @@ data class MyStore(
     val hasLayout: Boolean,
 )
 
-/** #42: PATCH /api/owner/store — 이름만 (영업 상태 open은 #23) */
+/**
+ * #42: PATCH /api/owner/store — 보낸 필드만 수정. #23: 영업 상태 open 추가.
+ * null(기본값)은 JSON에 넣지 않음 (encodeDefaults = false) → {"name":…} 또는 {"open":false}
+ */
 @Serializable
-data class UpdateStoreRequest(val name: String)
+data class UpdateStoreRequest(val name: String? = null, val open: Boolean? = null)
 
 /** 서버 검증과 같은 기준 (앞뒤 공백 제거 후 1~50자). 문제없으면 null */
 fun storeNameError(name: String): String? = when {
@@ -49,6 +52,13 @@ data class UpdateStatusRequest(val occupied: Boolean)
 /** #18: 200 (source·updatedAt은 쓰지 않아 생략) */
 @Serializable
 data class TableStatusResponse(val tableId: String, val occupied: Boolean)
+
+/** #23: POST /api/owner/tables/status/reset 응답 (매장 전체 테이블, updatedAt은 쓰지 않아 생략) */
+@Serializable
+data class StatusSnapshot(val statuses: List<Item>, val lastUpdatedAt: String? = null) {
+    @Serializable
+    data class Item(val tableId: String, val occupied: Boolean)
+}
 
 /** 모든 에러 응답: { "code": "TABLE_NOT_FOUND", "message": "테이블을 찾을 수 없어요" } */
 @Serializable
