@@ -1,5 +1,0 @@
-<?xml version="1.0" encoding="utf-8"?>
-<!-- #53: release 빌드에만 합쳐짐. 운영 서버(HTTP) 도메인만 cleartext 허용 -->
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
-    <application android:networkSecurityConfig="@xml/network_security_config" />
-</manifest>
