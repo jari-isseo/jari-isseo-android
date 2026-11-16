@@ -60,6 +60,10 @@ data class StatusSnapshot(val statuses: List<Item>, val lastUpdatedAt: String? =
     data class Item(val tableId: String, val occupied: Boolean)
 }
 
+/** #63: GET /api/public/stores/{publicId} 응답 (store·lastUpdatedAt은 쓰지 않아 생략) */
+@Serializable
+data class PublicSnapshot(val layout: LayoutDto? = null, val statuses: List<StatusSnapshot.Item> = emptyList())
+
 /** 모든 에러 응답: { "code": "TABLE_NOT_FOUND", "message": "테이블을 찾을 수 없어요" } */
 @Serializable
 data class ErrorBody(val code: String, val message: String)
