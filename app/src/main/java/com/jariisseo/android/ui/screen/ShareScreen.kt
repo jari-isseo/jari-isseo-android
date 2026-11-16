@@ -237,7 +237,6 @@ private const val EXPORT_TIMEOUT_MS = 15_000L
  */
 @Composable
 private fun StoreImageSection(store: MyStore, onSave: (Bitmap, String) -> Unit) {
-    val scope = rememberCoroutineScope()
     var floorsAttempt by remember { mutableIntStateOf(0) }
     var floors by remember { mutableStateOf<List<FloorDto>?>(null) }
     var floorsError by remember { mutableStateOf<String?>(null) }
@@ -306,10 +305,13 @@ private fun StoreImageSection(store: MyStore, onSave: (Bitmap, String) -> Unit) 
             if (floor != null && image == null && !exportFailed) {
                 key(floor, exportAttempt) {
                     val requested = floor to exportAttempt
+                    // 이 WebView와 함께 사라지는 스코프: 다른 탭으로 바꾸면 진행 중인 디코드도 취소
+                    //   (A → B → 다시 A일 때 이전 A의 늦은 결과가 새 A를 실패로 바꾸지 않게)
+                    val exportScope = rememberCoroutineScope()
                     ExportWebView(
                         url = exportViewerUrl(BuildConfig.BASE_URL, store.publicId, floor),
                         onExport = { base64 ->
-                            scope.launch {
+                            exportScope.launch {
                                 val bitmap = withContext(Dispatchers.Default) { decodeExportPng(base64) }
                                 if (requested != (selected to exportAttempt)) return@launch   // 그새 다른 층을 고름
                                 if (bitmap == null) exportFailed = true else image = bitmap

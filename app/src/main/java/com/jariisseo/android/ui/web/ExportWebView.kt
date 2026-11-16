@@ -81,7 +81,15 @@ fun decodeExportPng(base64: String): Bitmap? {
     } catch (_: IllegalArgumentException) {
         return null
     }
-    val bitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.size) ?: return null
+    // 크기만 먼저 읽고, 2배 단위로 줄여서 읽음 → 세로로 긴 '모든 층' 이미지도 원본 전체를 메모리에 올리지 않음
+    val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+    BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
+    if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return null
+    var sample = 1
+    while (max(bounds.outWidth, bounds.outHeight) / (sample * 2) >= EXPORT_MAX_SIDE) sample *= 2
+    val options = BitmapFactory.Options().apply { inSampleSize = sample }
+    val bitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.size, options) ?: return null
+    // 남은 차이는 정확히 맞춤
     val longest = max(bitmap.width, bitmap.height)
     if (longest <= EXPORT_MAX_SIDE) return bitmap
     val scale = EXPORT_MAX_SIDE.toFloat() / longest
