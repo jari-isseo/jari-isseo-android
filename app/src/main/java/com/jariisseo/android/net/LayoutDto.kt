@@ -107,6 +107,11 @@ sealed interface FloorTarget {
  * 서버는 테이블 id를 모든 층에서 유일하게 요구 → 다른 층과 겹치는 테이블·의자 id는 새로 만듦
  */
 fun withFloor(server: LayoutDto?, floor: Layout, target: FloorTarget, random: Random = Random.Default): PendingLayout {
+    // 새 층 저장이 서버엔 반영됐는데 응답만 못 받고 다시 저장하는 경우 → 이미 서버에 있는 그 층을 교체 (또 추가하지 않음).
+    //   층 id는 앱이 만든 랜덤 id라, 층 id와 테이블 id가 모두 같으면 같은 저장으로 봄 (id만 같은 다른 층은 덮어쓰지 않음)
+    val retried = (target as? FloorTarget.New)?.let { server?.floors?.firstOrNull { it.isSameSave(floor) } }
+    if (retried != null) return withFloor(server, floor, FloorTarget.Existing(retried.id, retried.name), random)
+
     val others = server?.floors.orEmpty().filterNot { target is FloorTarget.Existing && it.id == target.id }
     val replacing = (target as? FloorTarget.Existing)?.let { t -> server?.floors?.firstOrNull { it.id == t.id } }
     val floorId = when {
@@ -127,6 +132,10 @@ fun withFloor(server: LayoutDto?, floor: Layout, target: FloorTarget, random: Ra
         floorId = floorId,
     )
 }
+
+/** 서버 층이 이 앱 배치를 저장한 결과인지 (층 id와 테이블 id 집합이 같음) */
+private fun FloorDto.isSameSave(floor: Layout): Boolean =
+    id == floor.floorId && tables.map { it.id }.toSet() == floor.tables.map { it.id }.toSet()
 
 /** 다른 층의 테이블·의자 id와 겹치는 것만 새 id로 (겹치지 않으면 그대로 → 상태 유지) */
 private fun withUniqueItemIds(floor: Layout, others: List<FloorDto>, random: Random): Layout {

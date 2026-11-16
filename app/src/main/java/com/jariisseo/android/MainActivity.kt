@@ -166,7 +166,10 @@ class MainActivity : ComponentActivity() {
                         if (target != editTarget) editLayout = null
                         editTarget = target
                         if (scan && target != scannedTarget) {
-                            renderer.clear()
+                            renderer.clear()   // 기록은 다음 프레임(GL 스레드)에서 지워짐
+                            // 화면 상태는 지금 바로 비움 → 첫 프레임 전에 [스캔 완료]를 눌러도 이전 층 결과가 넘어가지 않게.
+                            //   스캔 화면 밖에서는 AR이 멈춰 있어 이전 층 상태가 뒤늦게 오지 않음
+                            uiState = ArUiState()
                             scannedTarget = target
                         }
                     },

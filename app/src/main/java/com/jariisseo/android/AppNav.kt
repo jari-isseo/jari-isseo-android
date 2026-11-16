@@ -135,10 +135,20 @@ fun AppNav(
         composable(Route.SHARE) {
             ShareScreen(onBack = { nav.popBackStack() })
         }
+        // #25: 액티비티가 다시 만들어지면(설정 변경·프로세스 종료) 작업 중인 층을 잃음 → 스캔·보정할 층이 없으니 홈으로
+        //   (저장 안 한 스캔 결과는 원래도 이때 사라짐. 기존 층은 홈에서 다시 [보정])
         composable(Route.SCAN) {
+            if (target == null) {
+                LaunchedEffect(Unit) { nav.popBackStack(Route.HOME, inclusive = false) }
+                return@composable
+            }
             scanContent({ nav.popBackStack() }, { nav.navigate(Route.EDIT) })
         }
         composable(Route.EDIT) {
+            if (target == null) {
+                LaunchedEffect(Unit) { nav.popBackStack(Route.HOME, inclusive = false) }
+                return@composable
+            }
             EditScreen(
                 layout = layout,
                 onChange = onLayoutChange,

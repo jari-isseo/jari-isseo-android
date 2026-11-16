@@ -143,6 +143,22 @@ class LayoutDtoTest {
         assertEquals(all.size, all.toSet().size)
     }
 
+    /** #25 리뷰: 새 층 저장이 서버엔 반영됐는데 응답만 못 받고 다시 저장 → 또 추가하지 않고 그 층을 교체 */
+    @Test
+    fun withFloor_newRetriedAfterLostResponse_replacesInsteadOfDuplicating() {
+        val first = floor("f-old1", 0, "t-old1")
+        val committed = layout.toFloorDto("2층", 1)   // 지난번 저장이 서버에 남긴 그 층
+        val server = LayoutDto(4, floors = listOf(first, committed))
+
+        val pending = withFloor(server, layout, FloorTarget.New("2층"))
+
+        assertEquals(listOf("f-old1", "f-aaaa"), pending.layout.floors.map { it.id })
+        assertEquals(1, pending.layout.floors[1].order)
+        assertEquals(listOf("t-1111", "t-2222"), pending.layout.floors[1].tables.map { it.id })
+        assertEquals("f-aaaa", pending.floorId)
+        assertFalse(pending.resetsStatus)
+    }
+
     private val three = LayoutDto(
         3,
         floors = listOf(floor("f-c", 2, "t-c"), floor("f-a", 0, "t-a"), floor("f-b", 1, "t-b")),

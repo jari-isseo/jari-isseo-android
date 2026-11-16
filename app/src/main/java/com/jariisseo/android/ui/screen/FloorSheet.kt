@@ -11,6 +11,8 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.SheetValue
+import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -57,6 +59,8 @@ fun FloorSheet(
     var busy by remember { mutableStateOf(false) }
     var renaming by remember { mutableStateOf(false) }
     var confirmDelete by remember { mutableStateOf(false) }
+    // 서버 작업 중에는 시트를 닫지 못하게 (닫히면 작업이 취소돼 서버엔 반영됐는데 홈 목록이 안 바뀔 수 있음)
+    val sheetState = rememberModalBottomSheetState(confirmValueChange = { it != SheetValue.Hidden || !busy })
 
     // 서버 작업 하나: 성공하면 목록 새로고침, 실패하면 서버 문구 토스트 (시트는 그대로)
     fun run(action: suspend () -> Unit) {
@@ -74,7 +78,7 @@ fun FloorSheet(
         }
     }
 
-    ModalBottomSheet(onDismissRequest = onDismiss, containerColor = Bg) {
+    ModalBottomSheet(onDismissRequest = { if (!busy) onDismiss() }, sheetState = sheetState, containerColor = Bg) {
         Column(Modifier.padding(bottom = 24.dp)) {
             Text(floor.name, Modifier.padding(horizontal = 24.dp), fontSize = 20.sp, fontWeight = FontWeight.Black)
             Text("테이블 ${floor.tables.size}개", Modifier.padding(start = 24.dp, end = 24.dp, top = 4.dp, bottom = 8.dp), fontSize = 14.sp, color = Sub)
