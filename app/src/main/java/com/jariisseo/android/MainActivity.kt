@@ -10,6 +10,8 @@ import android.graphics.Paint
 import android.opengl.GLSurfaceView
 import android.os.Build
 import android.os.Bundle
+import android.os.SystemClock
+import android.util.Log
 import android.os.VibrationEffect
 import android.os.Vibrator
 import android.view.KeyEvent
@@ -41,7 +43,9 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -61,6 +65,8 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
 import androidx.core.content.FileProvider
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.repeatOnLifecycle
 import com.google.ar.core.ArCoreApk
 import com.google.ar.core.Config
 import com.google.ar.core.Session
@@ -80,15 +86,17 @@ import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import kotlinx.coroutines.delay
 
 class MainActivity : ComponentActivity() {
 
     // ★ 글자 하나(statusText) 대신 화면 상태 전체를 들고 있음
     private var uiState by mutableStateOf(ArUiState())
-    private var modelInfo by mutableStateOf("모델 로딩 중...")   // ★ 8교시
+    private var modelError by mutableStateOf<String?>(null)   // ★ 8교시. #9: 실패하면 안내 배너에 표시 (성공 정보는 Logcat)
     private var editLayout by mutableStateOf<Layout?>(null)    // #13: 보정 중인 배치 ([스캔 완료] 때 새로 만듦)
     private var editTarget by mutableStateOf<FloorTarget?>(null)   // #25: 스캔·보정 중인 층
     private var scannedTarget: FloorTarget? = null                 // #25: renderer에 남아 있는 스캔 기록(벽·가구)이 어느 층 것인지
+    private var scanElapsedMs by mutableLongStateOf(0L)            // #9: 스캔 경과 시간 (스캔 화면이 보이고 resume일 때만 셈)
 
     private var session: Session? = null          // ARCore 엔진. 처음엔 없음(null)
     private var installRequested = false          // AR 서비스 설치 화면을 이미 띄웠는지
@@ -119,9 +127,10 @@ class MainActivity : ComponentActivity() {
 
         // ★ 8교시: 모델 로드 → 실패해도 앱은 계속 (AR 측정 기능은 동작)
         val detector = try {
-            Detector(this).also { modelInfo = it.describe() }
+            Detector(this).also { Log.d("MainActivity", it.describe()) }
         } catch (e: Exception) {
-            modelInfo = "모델 로드 실패: ${e.message}"
+            Log.e("MainActivity", "모델 로드 실패", e)
+            modelError = "가구 인식을 준비하지 못했어요 · 앱을 다시 켜 주세요"
             null
         }
         // GL 스레드에서 온 상태를 UI 스레드로 넘겨서 화면 갱신
@@ -170,6 +179,7 @@ class MainActivity : ComponentActivity() {
                             // 화면 상태는 지금 바로 비움 → 첫 프레임 전에 [스캔 완료]를 눌러도 이전 층 결과가 넘어가지 않게.
                             //   스캔 화면 밖에서는 AR이 멈춰 있어 이전 층 상태가 뒤늦게 오지 않음
                             uiState = ArUiState()
+                            scanElapsedMs = 0L
                             scannedTarget = target
                         }
                     },
@@ -178,6 +188,7 @@ class MainActivity : ComponentActivity() {
                         editLayout = null
                         editTarget = null
                         scannedTarget = null
+                        scanElapsedMs = 0L
                         renderer.clear()
                     },
                 )
@@ -203,6 +214,18 @@ class MainActivity : ComponentActivity() {
                 scanVisible = false
                 stopAr()
                 requestedOrientation = defaultOrientation()
+            }
+        }
+        // #9: 경과 시간은 화면이 보이고 resume 상태일 때만 셈 (백그라운드에서는 멈춤)
+        LaunchedEffect(Unit) {
+            lifecycle.repeatOnLifecycle(Lifecycle.State.RESUMED) {
+                var last = SystemClock.elapsedRealtime()
+                while (true) {
+                    delay(1000)
+                    val now = SystemClock.elapsedRealtime()
+                    scanElapsedMs += now - last
+                    last = now
+                }
             }
         }
 
@@ -259,19 +282,18 @@ class MainActivity : ComponentActivity() {
                     color = Color.White.copy(alpha = 0.8f), fontSize = 13.sp,
                 )
                 StepIndicator(step = if (state.outlineClosed) 2 else 1, modifier = Modifier.align(Alignment.CenterHorizontally).padding(top = 8.dp))
-                // 개발용 정보 (추적 상태·평면·모델·추론·두 점 거리)
-                Column(
-                    Modifier
-                        .padding(start = 12.dp, top = 10.dp)
-                        .background(Color.Black.copy(alpha = 0.45f), RoundedCornerShape(8.dp))
-                        .padding(horizontal = 8.dp, vertical = 6.dp),
-                ) {
-                    val dev = Color.White.copy(alpha = 0.85f)
-                    Text(state.status, color = dev, fontSize = 11.sp)
-                    Text("평면: 바닥 ${state.floorPlanes}개 · 벽 ${state.walls.size}개", color = dev, fontSize = 11.sp)
-                    Text(modelInfo, color = dev, fontSize = 11.sp)   // ★ 8교시
-                    if (state.detectInfo.isNotEmpty()) Text(state.detectInfo, color = dev, fontSize = 11.sp)
-                    state.lastDistanceM?.let { Text("두 점 거리: %.2f m".format(it), color = dev, fontSize = 11.sp) }
+                // #9: 오류(권한·카메라·모델) > 추적 실패 이유 순으로 안내
+                (state.error ?: modelError ?: trackingGuide(state.trackingIssue))?.let { guide ->
+                    Text(
+                        guide,
+                        Modifier
+                            .align(Alignment.CenterHorizontally)
+                            .padding(top = 10.dp, start = 16.dp, end = 16.dp)
+                            .clip(CircleShape)
+                            .background(Color.Black.copy(alpha = 0.6f))
+                            .padding(horizontal = 16.dp, vertical = 8.dp),
+                        color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Bold,
+                    )
                 }
             }
 
@@ -311,10 +333,15 @@ class MainActivity : ComponentActivity() {
                         Text("개", Modifier.padding(bottom = 2.dp), fontSize = 15.sp, fontWeight = FontWeight.Bold, color = Color.White)
                     }
                     Text(
-                        if (wallStep) "화면을 벽에 대고 볼륨 버튼 · 3개부터 완료"
-                        else "의자 ${confirmed.count { it.label == "의자" }} · 천천히 걸으며 비춰 주세요",
+                        when {
+                            wallStep -> "화면을 벽에 대고 볼륨 버튼 · 3개부터 완료"
+                            needsSlowLap(scanElapsedMs, state) -> "천천히 한 바퀴 더 돌며 테이블을 비춰 주세요"
+                            !canFinish(state) -> "테이블을 1개 이상 찾으면 완료할 수 있어요"
+                            else -> "의자 ${confirmed.count { it.label == "의자" }} · 천천히 걸으며 비춰 주세요"
+                        },
                         fontSize = 12.sp, color = dim,
                     )
+                    Text("경과 ${formatElapsed(scanElapsedMs)}", fontSize = 12.sp, color = dim)   // #9
                     Text(state.message, fontSize = 11.sp, color = Color.White.copy(alpha = 0.55f), maxLines = 1)
                 }
                 MiniMap(state, Modifier.size(64.dp).clip(RoundedCornerShape(16.dp)))
@@ -327,7 +354,7 @@ class MainActivity : ComponentActivity() {
                 } else {
                     // [벽 다시] = 완료만 풀고 1단계로 (기록한 벽·인식한 가구는 유지)
                     GlassButton("벽 다시", { renderer.outlineOp(OutlineOp.UNDO) }, Modifier.weight(1f))
-                    LightButton("스캔 완료", onDone, Modifier.weight(2f))
+                    LightButton("스캔 완료", onDone, Modifier.weight(2f), enabled = canFinish(state))   // #9: 확정 테이블 0개면 비활성
                 }
             }
 
@@ -353,6 +380,7 @@ class MainActivity : ComponentActivity() {
                     confirmButton = {
                         TextButton(onClick = {
                             renderer.clear()
+                            scanElapsedMs = 0L
                             confirmReset = false
                         }) { Text("지우기", color = Danger, fontWeight = FontWeight.Bold) }
                     },
@@ -581,7 +609,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun showStatus(text: String) {
-        uiState = uiState.copy(status = text)
+        uiState = uiState.copy(status = text, error = text)   // #9: error = 안내 배너에 표시
     }
 
     private fun hasCameraPermission(): Boolean =

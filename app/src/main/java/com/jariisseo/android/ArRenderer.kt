@@ -36,6 +36,8 @@ data class ScreenBox(
 /** GL 스레드 → UI 스레드로 넘기는 화면 상태 (Spring의 응답 DTO 같은 역할) */
 data class ArUiState(
     val status: String = "확인 중...",
+    val trackingIssue: TrackingIssue = TrackingIssue.INITIALIZING,   // #9: 사장님용 추적 안내
+    val error: String? = null,                                       // #9: 스캔을 못 하는 오류 (안내 배너에 표시)
     val floorPlanes: Int = 0,                     // #4: 바닥 높이의 평면만 (책상 윗면·의자 앉는 면 제외)
     val points: List<ScreenPoint> = emptyList(),
     val lastDistanceM: Float? = null,
@@ -234,7 +236,7 @@ class ArRenderer(
             }
             report(buildState(session, frame, camera))
         } catch (e: Exception) {
-            report(ArUiState(status = "오류: ${e.javaClass.simpleName}"))
+            report(ArUiState(status = "오류: ${e.javaClass.simpleName}", error = "오류가 났어요 · 스캔 화면을 다시 열어 주세요"))
         }
     }
 
@@ -525,6 +527,7 @@ class ArRenderer(
 
         return ArUiState(
             status = statusOf(camera),
+            trackingIssue = issueOf(camera),
             floorPlanes = floors.size,
             points = anchors.map { toScreen(it) },
             lastDistanceM = lastDistance,
@@ -734,6 +737,18 @@ class ArRenderer(
             else -> camera.trackingFailureReason.name
         }
         TrackingState.STOPPED -> "추적 중지됨"
+    }
+
+    /** #9: 추적 상태 → 사장님용 안내 종류 */
+    private fun issueOf(camera: Camera): TrackingIssue = when (camera.trackingState) {
+        TrackingState.TRACKING -> TrackingIssue.NONE
+        TrackingState.PAUSED -> when (camera.trackingFailureReason) {
+            TrackingFailureReason.INSUFFICIENT_LIGHT -> TrackingIssue.DARK
+            TrackingFailureReason.EXCESSIVE_MOTION -> TrackingIssue.FAST
+            TrackingFailureReason.INSUFFICIENT_FEATURES -> TrackingIssue.FEATURELESS
+            else -> TrackingIssue.INITIALIZING
+        }
+        TrackingState.STOPPED -> TrackingIssue.STOPPED
     }
 
     companion object {
