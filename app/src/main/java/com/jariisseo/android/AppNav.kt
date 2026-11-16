@@ -18,6 +18,7 @@ import com.jariisseo.android.net.Server
 import com.jariisseo.android.ui.screen.EditScreen
 import com.jariisseo.android.ui.screen.HomeScreen
 import com.jariisseo.android.ui.screen.LoginScreen
+import com.jariisseo.android.ui.screen.ShareScreen
 import com.jariisseo.android.ui.screen.SignupScreen
 import com.jariisseo.android.ui.screen.StoreScreen
 import com.jariisseo.android.ui.screen.ViewScreen
@@ -33,6 +34,7 @@ object Route {
     const val EDIT = "edit"   // 탑뷰 보정
     const val VIEW = "view"   // 사장님 뷰
     const val STORE = "store"   // #42: 가게 정보
+    const val SHARE = "share"   // #22: 손님에게 알리기 (링크·QR)
 }
 
 /**
@@ -100,10 +102,14 @@ fun AppNav(
                 // 빠르게 두 번 눌러도 스캔이 쌓이지 않게 (두 스캔 화면이 같은 glView를 붙이면 크래시)
                 onScan = { nav.navigate(Route.SCAN) { launchSingleTop = true } },
                 onStore = { nav.navigate(Route.STORE) { launchSingleTop = true } },
+                onShare = { nav.navigate(Route.SHARE) { launchSingleTop = true } },
             )
         }
         composable(Route.STORE) {
             StoreScreen(onBack = { nav.popBackStack() }, onLoggedOut = { toLogin() })
+        }
+        composable(Route.SHARE) {
+            ShareScreen(onBack = { nav.popBackStack() })
         }
         composable(Route.SCAN) {
             scanContent({ nav.popBackStack() }, { nav.navigate(Route.EDIT) })

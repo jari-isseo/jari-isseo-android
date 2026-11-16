@@ -53,9 +53,10 @@ import com.jariisseo.android.ui.theme.Sub
  * #10: 시안 D ④ 홈. 매장 이름·빈자리 수는 서버 연동 후, 층 목록은 #25, 공유는 #22에서 채움.
  * 지금은 "1층" 한 줄과 이동만 (가짜 숫자 대신 "-")
  * #42: 제목 = 서버의 매장 이름 (불러오기 전·실패 시 "내 매장"). 가게 정보에서 돌아오면 다시 불러옴
+ * #22: 오른쪽 위 [손님에게 알리기] → 공유 화면
  */
 @Composable
-fun HomeScreen(onView: () -> Unit, onEdit: () -> Unit, onScan: () -> Unit, onStore: () -> Unit) {
+fun HomeScreen(onView: () -> Unit, onEdit: () -> Unit, onScan: () -> Unit, onStore: () -> Unit, onShare: () -> Unit) {
     var storeName by remember { mutableStateOf<String?>(null) }
     LaunchedEffect(Unit) {
         // 401은 AuthInterceptor가 로그인으로 보냄, 그 밖의 실패는 "내 매장" 그대로
@@ -75,7 +76,7 @@ fun HomeScreen(onView: () -> Unit, onEdit: () -> Unit, onScan: () -> Unit, onSto
                         lineHeight = 40.sp, maxLines = 2, overflow = TextOverflow.Ellipsis,
                     )
                 }
-                CircleButton(Glyph.SHARE, "손님에게 알리기", onClick = {}, fill = Color.White)   // 공유 화면은 #22
+                CircleButton(Glyph.SHARE, "손님에게 알리기", onClick = onShare, fill = Color.White)
             }
 
             // 세이지 카드: 지금 빈자리 (화면의 색 덩어리 1개)
