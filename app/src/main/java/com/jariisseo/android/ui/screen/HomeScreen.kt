@@ -100,21 +100,15 @@ fun HomeScreen(
     var floors by remember { mutableStateOf<List<FloorDto>?>(null) }
     var floorsError by remember { mutableStateOf<String?>(null) }
     var managing by remember { mutableStateOf<FloorDto?>(null) }   // 관리 시트의 층
-    LaunchedEffect(Unit) {
-        // 401은 AuthInterceptor가 로그인으로 보냄, 그 밖의 실패는 "내 매장" 그대로
+    // 매장 정보 → #63 빈자리. 처음·층 관리 후·[다시 시도]마다.
+    // 매장 정보를 아직 못 받았으면(처음 실패) 여기서 다시 받음 → 연결이 돌아오면 [다시 시도]로 이름·빈자리 모두 복구
+    // 401은 AuthInterceptor가 로그인으로 보냄, 그 밖의 실패는 이름 "내 매장"·빈자리 실패 문구
+    LaunchedEffect(floorsAttempt) {
         try {
-            val store = apiCall { Server.api.myStore() }
-            storeName = store.name
-            publicId = store.publicId
-        } catch (_: ApiException) {
-            seatsLoading = false
-            seatsFailed = true   // publicId가 없으면 빈자리도 못 불러옴
-        }
-    }
-    // #63: 매장 정보를 받은 뒤, 그리고 층 관리 후·[다시 시도]마다
-    LaunchedEffect(publicId, floorsAttempt) {
-        val id = publicId ?: return@LaunchedEffect
-        try {
+            val id = publicId ?: apiCall { Server.api.myStore() }.also {
+                storeName = it.name
+                publicId = it.publicId
+            }.publicId
             seats = seatCountOf(apiCall { Server.api.publicSnapshot(id) })
             seatsFailed = false
         } catch (_: ApiException) {
