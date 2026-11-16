@@ -10,6 +10,8 @@ import com.jariisseo.android.net.FloorDto
 import com.jariisseo.android.net.FloorTarget
 import com.jariisseo.android.ArSupport
 import com.jariisseo.android.net.MAX_FLOORS
+import com.jariisseo.android.net.SeatCount
+import com.jariisseo.android.net.seatCountOf
 import com.jariisseo.android.net.displayMessage
 import com.jariisseo.android.ui.PillTab
 import androidx.compose.foundation.clickable
@@ -69,7 +71,7 @@ private fun noScanMessage(ar: ArSupport): String? = when (ar) {
 }
 
 /**
- * #10: 시안 D ④ 홈. 빈자리 수는 서버 연동 후 (가짜 숫자 대신 "-")
+ * #10: 시안 D ④ 홈. #63: 카드 = 매장 전체 빈자리 수 (공개 스냅샷, 홈에 돌아오거나 층을 고칠 때마다 새로 불러옴)
  * #42: 제목 = 서버의 매장 이름 (불러오기 전·실패 시 "내 매장"). 가게 정보에서 돌아오면 다시 불러옴
  * #22: 오른쪽 위 [손님에게 알리기] → 공유 화면
  * #25: 층 목록 = 서버 배치의 층 (이름 · 테이블 수). 행을 누르면 층 관리 시트, [+] = 층 추가 (10개까지)
@@ -90,6 +92,10 @@ fun HomeScreen(
     val noScan = noScanMessage(arSupport)
     val context = LocalContext.current
     var storeName by remember { mutableStateOf<String?>(null) }
+    var publicId by remember { mutableStateOf<String?>(null) }
+    var seatsLoading by remember { mutableStateOf(true) }
+    var seats by remember { mutableStateOf<SeatCount?>(null) }      // null = 배치 없음
+    var seatsFailed by remember { mutableStateOf(false) }
     var floorsAttempt by remember { mutableIntStateOf(0) }   // 층 관리 후·[다시 시도]마다 +1
     var floors by remember { mutableStateOf<List<FloorDto>?>(null) }
     var floorsError by remember { mutableStateOf<String?>(null) }
@@ -97,8 +103,24 @@ fun HomeScreen(
     LaunchedEffect(Unit) {
         // 401은 AuthInterceptor가 로그인으로 보냄, 그 밖의 실패는 "내 매장" 그대로
         try {
-            storeName = apiCall { Server.api.myStore() }.name
+            val store = apiCall { Server.api.myStore() }
+            storeName = store.name
+            publicId = store.publicId
         } catch (_: ApiException) {
+            seatsLoading = false
+            seatsFailed = true   // publicId가 없으면 빈자리도 못 불러옴
+        }
+    }
+    // #63: 매장 정보를 받은 뒤, 그리고 층 관리 후·[다시 시도]마다
+    LaunchedEffect(publicId, floorsAttempt) {
+        val id = publicId ?: return@LaunchedEffect
+        try {
+            seats = seatCountOf(apiCall { Server.api.publicSnapshot(id) })
+            seatsFailed = false
+        } catch (_: ApiException) {
+            seatsFailed = true
+        } finally {
+            seatsLoading = false
         }
     }
     LaunchedEffect(floorsAttempt) {
@@ -158,9 +180,18 @@ fun HomeScreen(
                     .padding(24.dp),
             ) {
                 Text("지금 빈자리", color = SageInk, fontSize = 15.sp, fontWeight = FontWeight.Bold)
-                BigNumber("-", color = SageInk, size = 96)
+                val count = seats
+                BigNumber(if (count != null && !seatsFailed) "${count.empty}" else "-", color = SageInk, size = 96)
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text("스캔을 마치면 여기에 보여요", Modifier.weight(1f), color = SageInk, fontSize = 14.sp)
+                    Text(
+                        when {
+                            seatsFailed -> "빈자리를 불러오지 못했어요"
+                            seatsLoading -> "빈자리를 불러오는 중…"
+                            count == null -> "스캔을 마치면 여기에 보여요"
+                            else -> "전체 ${count.total}개 중"
+                        },
+                        Modifier.weight(1f), color = SageInk, fontSize = 14.sp,
+                    )
                     Row(
                         Modifier.height(48.dp).clip(CircleShape).background(Brown).padding(horizontal = 18.dp),
                         verticalAlignment = Alignment.CenterVertically,

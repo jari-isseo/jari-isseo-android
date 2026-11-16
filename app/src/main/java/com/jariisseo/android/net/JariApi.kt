@@ -34,6 +34,10 @@ interface JariApi {
     @PUT("api/owner/tables/{tableId}/status")
     suspend fun changeStatus(@Path("tableId") tableId: String, @Body body: UpdateStatusRequest): TableStatusResponse
 
+    /** #63: 손님 웹과 같은 공개 스냅샷 (배치 + 상태). 배치가 없으면 layout = null, 없는 매장이면 404 STORE_NOT_FOUND */
+    @GET("api/public/stores/{publicId}")
+    suspend fun publicSnapshot(@Path("publicId") publicId: String): PublicSnapshot
+
     /** #23: 모든 층의 테이블을 손님 없음으로. 손님 웹에도 SSE snapshot으로 전달됨 */
     @POST("api/owner/tables/status/reset")
     suspend fun resetStatuses(): StatusSnapshot
