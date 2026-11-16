@@ -33,4 +33,8 @@ interface JariApi {
     /** #18: 없는 테이블이면 404 TABLE_NOT_FOUND */
     @PUT("api/owner/tables/{tableId}/status")
     suspend fun changeStatus(@Path("tableId") tableId: String, @Body body: UpdateStatusRequest): TableStatusResponse
+
+    /** #23: 모든 층의 테이블을 손님 없음으로. 손님 웹에도 SSE snapshot으로 전달됨 */
+    @POST("api/owner/tables/status/reset")
+    suspend fun resetStatuses(): StatusSnapshot
 }

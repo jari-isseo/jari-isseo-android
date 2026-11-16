@@ -37,6 +37,7 @@ fun OwnerWebView(
     onSummary: (free: Int, total: Int) -> Unit,
     onError: () -> Unit,
     modifier: Modifier = Modifier,
+    onCreated: (WebView) -> Unit = {},   // #23: 탭 말고도(전체 비우기) 웹에 반영할 때 쓰도록 WebView를 넘김
 ) {
     val ready by rememberUpdatedState(onReady)
     val tap by rememberUpdatedState(onTableTap)
@@ -84,7 +85,7 @@ fun OwnerWebView(
                     }
                 }
                 loadUrl(url)
-            }
+            }.also(onCreated)
         },
         // [다시 시도] 등으로 주소가 같아도 다시 부를 땐 key로 새로 만듦 (호출하는 쪽)
         onRelease = { it.destroy() },
