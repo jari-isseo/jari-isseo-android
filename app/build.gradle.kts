@@ -97,4 +97,6 @@ dependencies {
     implementation(libs.androidx.datastore.preferences)
     testImplementation(libs.okhttp.mockwebserver)
     testImplementation(libs.kotlinx.coroutines.test)
+
+    implementation(libs.zxing.core)   // #22: 손님 링크 QR
 }

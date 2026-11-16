@@ -5,6 +5,8 @@
     <uses-permission android:name="android.permission.INTERNET" />   <!-- #11: 서버 API -->
     <uses-permission android:name="android.permission.CAMERA" />
     <uses-permission android:name="android.permission.VIBRATE" />
+    <!-- #22: QR을 사진에 저장. Android 10+는 권한 없이 MediaStore로 저장 -->
+    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" android:maxSdkVersion="28" />
     <uses-feature android:name="android.hardware.camera" android:required="true" />
     <uses-feature android:name="android.hardware.camera.ar" android:required="true" />
 
