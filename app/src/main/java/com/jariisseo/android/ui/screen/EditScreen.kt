@@ -50,15 +50,20 @@ import com.jariisseo.android.Layout
 import com.jariisseo.android.TABLE_SIZE_MAX
 import com.jariisseo.android.TABLE_SIZE_MIN
 import com.jariisseo.android.TableItem
+import com.jariisseo.android.addFloorPoint
 import com.jariisseo.android.addTable
+import com.jariisseo.android.floorError
 import com.jariisseo.android.net.ApiException
 import com.jariisseo.android.net.FloorTarget
 import com.jariisseo.android.net.Server
 import com.jariisseo.android.net.displayMessage
 import com.jariisseo.android.normalizeDegrees
+import com.jariisseo.android.normalizeOrigin
 import com.jariisseo.android.removeChair
+import com.jariisseo.android.removeFloorPoint
 import com.jariisseo.android.removeTable
 import com.jariisseo.android.rotateLayout
+import com.jariisseo.android.tablesOutsideFloor
 import com.jariisseo.android.updateTable
 import com.jariisseo.android.ui.CircleButton
 import com.jariisseo.android.ui.FOCUS_ANIM_MS
@@ -83,7 +88,8 @@ import kotlinx.coroutines.launch
  * #14: 테이블 추가·탭 편집·길게 눌러 삭제, 의자 이동·삭제, 배치 전체 회전(90° + 미세 조정), 되돌리기.
  * #15: [저장] = 서버에 업로드 (다른 층은 그대로 두고 이 층만 교체). 다시 스캔한 층이면 상태 초기화 확인 후 저장.
  *   들어왔을 때 보정할 배치가 없으면(layout = null) 서버 배치를 불러와 기존 테이블 ID 그대로 다시 보정.
- * 벽 맞추기(방 외곽선 꼭짓점)는 #26
+ * #26: [바닥 모양] 모드 = 꼭짓점 끌기·변 가운데 + 탭 추가·길게 눌러 삭제 (벽은 바닥 각 변으로 자동).
+ *   꼬인 바닥은 저장 막고 안내, 바닥 밖 테이블은 경고만. 저장 때 좌표를 0 이상으로 맞춤
  * #25: 층 단위 (floorTarget). 기존 층은 그 층만 불러오고 교체, 새 층은 첫 저장 때 서버에 생김 → 이후엔 기존 층으로
  */
 @Composable
@@ -95,7 +101,7 @@ fun EditScreen(
     onBack: () -> Unit,
     onSaved: () -> Unit,
 ) {
-    var target by remember { mutableIntStateOf(0) }   // 0 = 테이블 옮기기, 1 = 벽 맞추기 (방 외곽선 꼭짓점, #26)
+    var target by remember { mutableIntStateOf(0) }   // 0 = 테이블, 1 = 바닥 모양 (꼭짓점, #26)
     // 되돌리기: 편집 한 번(끌기 1회, 시트 1회, 회전 1회) 전의 배치. 새 스캔이면 비움
     var history by remember(layout?.floorId) { mutableStateOf(listOf<Layout>()) }
     var fitCount by remember { mutableIntStateOf(0) }              // 바뀌면 탑뷰가 배치 전체를 다시 맞춤
@@ -108,6 +114,9 @@ fun EditScreen(
     fun commit(before: Layout, after: Layout) { push(before); onChange(after) }
     fun previewRotation(base: Layout) = onChange(rotateLayout(base, quarter * 90f + fine))
     val editing = layout?.tables?.firstOrNull { it.id == editingId }
+    // #26: 저장할 수 없는 바닥이면 이유. 저장 때 보내는 그대로(0 이상으로 옮긴 뒤) 검사 → cm 반올림 결과가 같음
+    val floorProblem = layout?.let { floorError(normalizeOrigin(it)) }
+    val outsideCount = layout?.let { tablesOutsideFloor(it).size } ?: 0  // #26: 바닥 밖 테이블 수 (경고만)
 
     // #15: 서버 저장·불러오기
     val scope = rememberCoroutineScope()
@@ -145,7 +154,7 @@ fun EditScreen(
                     confirmReset = true   // [바꾸기]면 save(false), [취소]면 저장 안 함
                     return@launch
                 }
-                val saved = Server.layouts.save(current, t)
+                val saved = Server.layouts.save(normalizeOrigin(current), t)   // #26: 꼭짓점을 음수 쪽으로 끌었어도 0 이상
                 onChange(saved)
                 // 새 층은 이제 서버에 있음 → 다시 저장해도 또 추가되지 않게
                 onTargetChange(FloorTarget.Existing(saved.floorId, t.name))
@@ -178,8 +187,8 @@ fun EditScreen(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             CircleButton(Glyph.BACK, "뒤로", onBack)
-            // 회전 모드 중에는 [완료] 전이라 저장 안 함
-            val canSave = layout != null && !saving && rotateBase == null
+            // 회전 모드 중에는 [완료] 전이라 저장 안 함. #26: 꼬인 바닥은 서버가 거부하므로 저장 안 함
+            val canSave = layout != null && !saving && rotateBase == null && floorProblem == null
             Box(
                 Modifier
                     .height(44.dp)
@@ -204,12 +213,12 @@ fun EditScreen(
                     when {
                         rotateBase != null -> "매장 입구가 화면 아래쪽에 오도록 돌려 주세요"
                         target == 0 -> "끌어서 이동 · 탭해서 편집 · 길게 눌러 삭제"
-                        else -> "방 모서리 점을 끌어서 실제 벽 위치에 맞춰 주세요"
+                        else -> "흰 점 끌어서 이동 · + 탭해서 추가 · 길게 눌러 삭제"
                     },
                     Modifier.padding(top = 16.dp),
                 )
 
-                // 편집 모드 (명사 대신 동작으로: 테이블 옮기기 / 벽 맞추기)
+                // 편집 모드 (#26: 테이블 / 바닥 모양)
                 Row(
                     Modifier
                         .padding(start = 20.dp, top = 16.dp)
@@ -217,7 +226,7 @@ fun EditScreen(
                         .padding(4.dp),
                     horizontalArrangement = Arrangement.spacedBy(4.dp),
                 ) {
-                    listOf("테이블 옮기기", "벽 맞추기").forEachIndexed { i, label ->
+                    listOf("테이블", "바닥 모양").forEachIndexed { i, label ->
                         val selected = i == target
                         Box(
                             Modifier
@@ -253,7 +262,7 @@ fun EditScreen(
             if (layout == null) {
                 Text(if (loading) "배치를 불러오는 중…" else "매장을 스캔하면 배치가 여기에 보여요", fontSize = 14.sp, color = Sub)
             } else {
-                // 벽 맞추기·회전 모드에서는 테이블·의자가 끌리지 않게 (꼭짓점 편집은 #26)
+                // 바닥 모양·회전 모드에서는 테이블·의자가 끌리지 않게. #26: 바닥 모양 모드에서는 꼭짓점 편집
                 TopView(
                     layout, onChange, Modifier.fillMaxSize(),
                     tablesMovable = target == 0 && rotateBase == null && !saving,
@@ -262,7 +271,31 @@ fun EditScreen(
                     onEditStart = { push(layout) },
                     onTableTap = { id -> push(layout); editingId = id },
                     onDelete = { id -> commit(layout, removeChair(removeTable(layout, id), id)) },
+                    floorEditable = target == 1 && rotateBase == null && !saving,
+                    onFloorPointAdd = { edge -> commit(layout, addFloorPoint(layout, edge)) },
+                    onFloorPointDelete = { i -> if (layout.floor.size > 3) commit(layout, removeFloorPoint(layout, i)) },
                 )
+                // #26: 배치도 안에 겹쳐 띄움 → 끄는 중에 문구가 생겨도 배치도 크기가 안 바뀌어 화면이 튀지 않음
+                floorProblem?.let {
+                    Text(
+                        it,
+                        Modifier
+                            .align(Alignment.TopCenter)
+                            .padding(top = 14.dp, start = 16.dp, end = 16.dp)
+                            .clip(CircleShape)
+                            .background(Color.White)
+                            .border(1.5.dp, Danger, CircleShape)
+                            .padding(horizontal = 14.dp, vertical = 6.dp),
+                        fontSize = 13.sp, color = Danger, fontWeight = FontWeight.Bold,
+                    )
+                }
+                if (outsideCount > 0) {
+                    Text(
+                        "바닥 밖 테이블 ${outsideCount}개",
+                        Modifier.align(Alignment.BottomStart).padding(start = 18.dp, bottom = 14.dp),
+                        fontSize = 12.sp, color = Danger, fontWeight = FontWeight.Bold,
+                    )
+                }
                 Text(
                     "두 손가락으로 확대·축소",
                     Modifier.align(Alignment.BottomEnd).padding(end = 18.dp, bottom = 14.dp),
@@ -327,7 +360,10 @@ fun EditScreen(
                                     else -> {
                                         val prev = history.last()
                                         history = history.dropLast(1)
-                                        if (prev.floor != l.floor) fitCount++   // 회전을 되돌렸으면 다시 맞춤
+                                        // 회전을 되돌렸으면 다시 맞춤 (회전 = 꼭짓점이 여러 개 바뀜. #26: 꼭짓점 1개 편집·추가·삭제는 화면 유지)
+                                        val rotated = prev.floor.size == l.floor.size &&
+                                            prev.floor.indices.count { prev.floor[it] != l.floor[it] } > 1
+                                        if (rotated) fitCount++
                                         onChange(prev)
                                     }
                                 }

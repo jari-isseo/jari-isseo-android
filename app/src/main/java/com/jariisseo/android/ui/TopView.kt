@@ -38,11 +38,19 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.jariisseo.android.CHAIR_RADIUS_M
 import com.jariisseo.android.Layout
+import com.jariisseo.android.floorEdgeMids
+import com.jariisseo.android.floorError
 import com.jariisseo.android.hitChair
+import com.jariisseo.android.hitFloorEdgeMid
+import com.jariisseo.android.hitFloorPoint
 import com.jariisseo.android.hitTable
 import com.jariisseo.android.moveChair
+import com.jariisseo.android.moveFloorPoint
 import com.jariisseo.android.moveTable
+import com.jariisseo.android.normalizeOrigin
+import com.jariisseo.android.tablesOutsideFloor
 import com.jariisseo.android.ui.theme.Brown
+import com.jariisseo.android.ui.theme.Danger
 import com.jariisseo.android.ui.theme.Line
 import com.jariisseo.android.ui.theme.Sage
 import com.jariisseo.android.ui.theme.SageInk
@@ -98,6 +106,8 @@ fun Layout.points(): List<Pair<Float, Float>> =
  * #14: 의자도 끌어서 이동, 테이블 탭 = onTableTap(편집 시트), 테이블·의자 길게 누름 = onDelete.
  * 끌기를 시작할 때 onEditStart 한 번 (되돌리기 단위). fitKey가 바뀌면 배치 전체가 보이게 다시 맞춤.
  * focusId: 편집 시트가 아래를 가리는 동안 그 테이블을 위쪽(높이 1/4)으로 옮기며 확대하고 선택 표시 (애니메이션)
+ * #26: floorEditable이면 테이블·의자 대신 바닥 꼭짓점을 끌어서 이동, 변 가운데(+) 탭 = onFloorPointAdd,
+ *   꼭짓점 길게 누름 = onFloorPointDelete. 꼬인 바닥은 빨간 테두리, 바닥 밖 테이블은 빨간 링 (두 모드 모두)
  */
 @Composable
 fun TopView(
@@ -110,6 +120,9 @@ fun TopView(
     onEditStart: () -> Unit = {},
     onTableTap: (String) -> Unit = {},
     onDelete: (String) -> Unit = {},
+    floorEditable: Boolean = false,
+    onFloorPointAdd: (Int) -> Unit = {},
+    onFloorPointDelete: (Int) -> Unit = {},
 ) {
     var size by remember { mutableStateOf(IntSize.Zero) }
     var transform by remember { mutableStateOf<TopViewTransform?>(null) }
@@ -121,6 +134,9 @@ fun TopView(
     val editStart by rememberUpdatedState(onEditStart)
     val tableTap by rememberUpdatedState(onTableTap)
     val delete by rememberUpdatedState(onDelete)
+    val floorEdit by rememberUpdatedState(floorEditable)
+    val pointAdd by rememberUpdatedState(onFloorPointAdd)
+    val pointDelete by rememberUpdatedState(onFloorPointDelete)
     val textMeasurer = rememberTextMeasurer()
     val padding = with(LocalDensity.current) { 28.dp.toPx() }
 
@@ -160,21 +176,28 @@ fun TopView(
                     val t0 = transform ?: return@awaitEachGesture
                     val (sx, sz) = t0.toStore(down.position.x, down.position.y)
                     val slop = 12.dp.toPx() / t0.scale
-                    val table = if (movable) hitTable(current, sx, sz, slop) else null
-                    val chair = if (movable && table == null) hitChair(current, sx, sz, slop) else null
+                    val table = if (movable && !floorEdit) hitTable(current, sx, sz, slop) else null
+                    val chair = if (movable && !floorEdit && table == null) hitChair(current, sx, sz, slop) else null
+                    // #26: 꼭짓점·변 가운데는 손가락으로 잡기 쉽게 더 넓게
+                    val pointSlop = 20.dp.toPx() / t0.scale
+                    val point = if (floorEdit) hitFloorPoint(current, sx, sz, pointSlop) else null
+                    val mid = if (floorEdit && point == null) hitFloorEdgeMid(current, sx, sz, pointSlop) else null
                     val hitId = table?.id ?: chair?.id
                     selected = hitId
-                    // 테이블·의자 위에서 시작 = 그 물건 (잡은 지점과 중심의 차이 유지)
+                    // 테이블·의자·꼭짓점 위에서 시작 = 그 대상 (잡은 지점과 중심의 차이 유지)
                     //   그대로 떼면 탭, 그대로 오래 누르면 삭제, touchSlop 넘게 움직이면 끌기
+                    // 변 가운데(+)는 탭만 (끌면 화면 이동)
                     // 빈 곳에서 시작하거나 두 번째 손가락이 닿으면 = 화면 이동·확대·축소
-                    var dragging = hitId != null
+                    val grabbed = hitId != null || point != null
+                    var dragging = grabbed
                     var moved = false
-                    val grabX = (table?.x ?: chair?.x ?: 0f) - sx
-                    val grabZ = (table?.z ?: chair?.z ?: 0f) - sz
+                    val pointAt = point?.let { current.floor[it] }
+                    val grabX = (table?.x ?: chair?.x ?: pointAt?.first ?: 0f) - sx
+                    val grabZ = (table?.z ?: chair?.z ?: pointAt?.second ?: 0f) - sz
                     val longPressAt = down.uptimeMillis + viewConfiguration.longPressTimeoutMillis
                     var now = down.uptimeMillis
                     do {
-                        val event = if (hitId != null && !moved) {
+                        val event = if (grabbed && !moved) {
                             withTimeoutOrNull((longPressAt - now).coerceAtLeast(0L)) { awaitPointerEvent() }
                         } else {
                             awaitPointerEvent()
@@ -182,7 +205,7 @@ fun TopView(
                         if (event == null) {
                             // 길게 누름 → 삭제, 손을 뗄 때까지 나머지 입력은 무시
                             selected = null
-                            delete(hitId!!)
+                            if (point != null) pointDelete(point) else delete(hitId!!)
                             do {
                                 val rest = awaitPointerEvent()
                                 rest.changes.forEach { it.consume() }
@@ -205,8 +228,11 @@ fun TopView(
                             if (moved && c != null && t != null) {
                                 val (x, z) = t.toStore(c.position.x, c.position.y)
                                 change(
-                                    if (table != null) moveTable(current, table.id, x + grabX, z + grabZ)
-                                    else moveChair(current, chair!!.id, x + grabX, z + grabZ),
+                                    when {
+                                        point != null -> moveFloorPoint(current, point, x + grabX, z + grabZ)
+                                        table != null -> moveTable(current, table.id, x + grabX, z + grabZ)
+                                        else -> moveChair(current, chair!!.id, x + grabX, z + grabZ)
+                                    },
                                 )
                             }
                         } else if (t != null) {
@@ -220,12 +246,14 @@ fun TopView(
                         event.changes.forEach { if (it.positionChanged()) it.consume() }
                     } while (event.changes.any { it.pressed })
                     if (!moved && table != null) tableTap(table.id)
+                    if (!moved && mid != null) pointAdd(mid)
                 }
             },
     ) {
         val t = transform ?: return@Canvas
 
         // 바닥 (연한 세이지 + 테두리)
+        val floorInvalid = floorError(normalizeOrigin(layout)) != null   // 저장 검사와 같은 기준 (EditScreen)
         if (layout.floor.size >= 3) {
             val path = Path().apply {
                 layout.floor.forEachIndexed { i, (x, z) ->
@@ -235,12 +263,13 @@ fun TopView(
                 close()
             }
             drawPath(path, FloorFill)
-            drawPath(path, FloorEdge, style = Stroke(width = 2.dp.toPx()))
+            // #26: 꼬인 바닥(저장 불가)은 빨간 테두리
+            drawPath(path, if (floorInvalid) Danger else FloorEdge, style = Stroke(width = 2.dp.toPx()))
         }
 
-        // 벽
+        // 벽. #26: 벽 = 바닥 각 변이라 바닥 테두리를 덮음 → 꼬인 바닥이면 벽도 빨간색
         layout.walls.forEach { (a, b) ->
-            drawLine(WallColor, t.toScreen(a.first, a.second), t.toScreen(b.first, b.second), strokeWidth = 4.dp.toPx(), cap = StrokeCap.Round)
+            drawLine(if (floorInvalid) Danger else WallColor, t.toScreen(a.first, a.second), t.toScreen(b.first, b.second), strokeWidth = 4.dp.toPx(), cap = StrokeCap.Round)
         }
 
         // 의자 (작은 원, 선택 = 세이지 + 링)
@@ -255,7 +284,8 @@ fun TopView(
             }
         }
 
-        // 테이블 (회전 반영, 선택 = 세이지 + 링)
+        // 테이블 (회전 반영, 선택 = 세이지 + 링, #26: 바닥 밖 = 빨간 링)
+        val outside = tablesOutsideFloor(layout)
         layout.tables.forEach { table ->
             val c = t.toScreen(table.x, table.z)
             val w = table.width * t.scale
@@ -271,6 +301,13 @@ fun TopView(
                         CornerRadius(radius.x + ring),
                     )
                 }
+                if (table.id in outside) {
+                    val ring = 3.dp.toPx()
+                    drawRoundRect(
+                        Danger, Offset(topLeft.x - ring, topLeft.y - ring), Size(w + 2 * ring, h + 2 * ring),
+                        CornerRadius(radius.x + ring), style = Stroke(width = 2.dp.toPx()),
+                    )
+                }
                 val fill = if (isSelected) Sage else Brown
                 if (table.shape == "ROUND") drawOval(fill, topLeft, Size(w, h)) else drawRoundRect(fill, topLeft, Size(w, h), radius)
             }
@@ -279,6 +316,23 @@ fun TopView(
                 TextStyle(color = if (isSelected) SageInk else Color.White, fontSize = 13.sp, fontWeight = FontWeight.Black),
             )
             drawText(label, topLeft = Offset(c.x - label.size.width / 2f, c.y - label.size.height / 2f))
+        }
+
+        // #26: 바닥 모양 모드 = 변 가운데 +(추가), 꼭짓점 흰 점(끌기·길게 눌러 삭제)
+        if (floorEditable) {
+            val plus = 5.dp.toPx()
+            floorEdgeMids(layout).forEach { (x, z) ->
+                val c = t.toScreen(x, z)
+                drawCircle(Color.White, 9.dp.toPx(), c)
+                drawCircle(FloorEdge, 9.dp.toPx(), c, style = Stroke(width = 1.5.dp.toPx()))
+                drawLine(Brown, Offset(c.x - plus, c.y), Offset(c.x + plus, c.y), strokeWidth = 2.dp.toPx(), cap = StrokeCap.Round)
+                drawLine(Brown, Offset(c.x, c.y - plus), Offset(c.x, c.y + plus), strokeWidth = 2.dp.toPx(), cap = StrokeCap.Round)
+            }
+            layout.floor.forEach { (x, z) ->
+                val c = t.toScreen(x, z)
+                drawCircle(Color.White, 10.dp.toPx(), c)
+                drawCircle(Brown, 10.dp.toPx(), c, style = Stroke(width = 3.dp.toPx()))
+            }
         }
     }
 }

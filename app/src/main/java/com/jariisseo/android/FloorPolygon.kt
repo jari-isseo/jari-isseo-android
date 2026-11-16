@@ -3,6 +3,7 @@ package com.jariisseo.android
 import kotlin.math.abs
 import kotlin.math.floor
 import kotlin.math.hypot
+import kotlin.math.sign
 
 /**
  * #4: 바닥 조각(ARCore 수평 평면)들의 합집합 외곽선 → 배치 JSON floor.polygon
@@ -79,6 +80,49 @@ class FloorPolygon {
                 j = i
             }
             return inside
+        }
+
+        /**
+         * #26: 단순 다각형인지 (서버 LayoutValidator.isSimplePolygon과 같은 규칙).
+         * 서버에는 cm로 반올림해 보내므로 cm 정수로 바꿔서 정확히 계산.
+         * 점 3개 이상, 넓이 0 아님, 길이 0인 변 없음, 이웃 변이 되돌아가지 않음, 이웃 아닌 변끼리 닿지 않음
+         */
+        fun isSimple(poly: List<Pair<Float, Float>>): Boolean {
+            val p = poly.map { Math.round(it.first * 100.0) to Math.round(it.second * 100.0) }
+            val n = p.size
+            if (n < 3) return false
+            fun cross(o: Pair<Long, Long>, a: Pair<Long, Long>, b: Pair<Long, Long>) =
+                (a.first - o.first) * (b.second - o.second) - (a.second - o.second) * (b.first - o.first)
+            fun onSegment(a: Pair<Long, Long>, b: Pair<Long, Long>, q: Pair<Long, Long>) =
+                q.first in minOf(a.first, b.first)..maxOf(a.first, b.first) &&
+                    q.second in minOf(a.second, b.second)..maxOf(a.second, b.second)
+            if (p.indices.sumOf { cross(0L to 0L, p[it], p[(it + 1) % n]) } == 0L) return false   // 넓이 0
+            if (p.indices.any { p[it] == p[(it + 1) % n] }) return false                         // 같은 점 연속
+            for (i in 0 until n) {
+                val a = p[i]
+                val b = p[(i + 1) % n]
+                for (j in i + 1 until n) {
+                    val c = p[j]
+                    val d = p[(j + 1) % n]
+                    val wrap = i == 0 && j == n - 1
+                    if (j == i + 1 || wrap) {
+                        // 이웃한 두 변: 공유 꼭짓점에서 한 직선 위로 되돌아가면 겹침
+                        val (from, shared, to) = if (wrap) Triple(c, a, b) else Triple(a, b, d)
+                        val dot = (shared.first - from.first) * (to.first - shared.first) +
+                            (shared.second - from.second) * (to.second - shared.second)
+                        if (cross(from, shared, to) == 0L && dot < 0) return false
+                        continue
+                    }
+                    val d1 = cross(c, d, a).sign
+                    val d2 = cross(c, d, b).sign
+                    val d3 = cross(a, b, c).sign
+                    val d4 = cross(a, b, d).sign
+                    if (d1 * d2 < 0 && d3 * d4 < 0) return false   // 엇갈려 교차
+                    if ((d1 == 0 && onSegment(c, d, a)) || (d2 == 0 && onSegment(c, d, b)) ||
+                        (d3 == 0 && onSegment(a, b, c)) || (d4 == 0 && onSegment(a, b, d))) return false   // 닿음
+                }
+            }
+            return true
         }
 
         /** 다각형 면적 (m²) */
