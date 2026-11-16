@@ -12,6 +12,7 @@ class OwnerBridge(
     private val onTableTap: (tableId: String, occupied: Boolean) -> Unit,
     private val onSummary: (free: Int, total: Int) -> Unit,
     private val post: (() -> Unit) -> Unit,
+    private val onExport: (pngBase64: String) -> Unit = {},   // #21: 출력 모드(ExportWebView)만 씀
 ) {
     /** 지금 보이는 층의 빈 테이블 수 / 전체 (server#49: 처음 그릴 때·상태 바뀔 때·층 바꿀 때) */
     @JavascriptInterface
@@ -25,9 +26,9 @@ class OwnerBridge(
     @JavascriptInterface
     fun onTableTap(tableId: String, occupied: Boolean) = post { onTableTap.invoke(tableId, occupied) }
 
-    /** 출력 모드 PNG (갤러리 저장은 #21) */
+    /** 출력 모드 PNG (base64, data: 접두사 없음). #21: 공유 화면 매장 이미지 */
     @JavascriptInterface
-    fun onExport(@Suppress("UNUSED_PARAMETER") pngBase64: String) = Unit
+    fun onExport(pngBase64: String) = post { onExport.invoke(pngBase64) }
 }
 
 /** 앱 → 웹: 상태를 바꾸지 않고 흐림만 풀기. tableId는 JSON 문자열로 넣어 따옴표·특수문자를 이스케이프 */
