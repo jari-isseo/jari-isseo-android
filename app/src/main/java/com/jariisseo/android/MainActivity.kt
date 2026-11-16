@@ -66,6 +66,7 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
 import androidx.core.content.FileProvider
 import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
 import com.google.ar.core.ArCoreApk
 import com.google.ar.core.Config
@@ -87,6 +88,7 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
 
@@ -100,6 +102,8 @@ class MainActivity : ComponentActivity() {
 
     private var session: Session? = null          // ARCore 엔진. 처음엔 없음(null)
     private var installRequested = false          // AR 서비스 설치 화면을 이미 띄웠는지
+    // #16: ARCore를 쓸 수 없는 기기면 false → 홈에서 스캔 입구를 막음. 확인 중·알 수 없음은 true (스캔 시 다시 확인됨)
+    private var arSupported by mutableStateOf(true)
 
     // #10: AR(카메라·인식)은 스캔 화면이 보이고 액티비티가 resume 상태일 때만 동작
     private var scanVisible = false
@@ -124,6 +128,7 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         requestedOrientation = defaultOrientation()
         Server.init(this)   // #11: 서버 API·토큰 저장
+        checkArAvailability()
 
         // ★ 8교시: 모델 로드 → 실패해도 앱은 계속 (AR 측정 기능은 동작)
         val detector = try {
@@ -183,6 +188,7 @@ class MainActivity : ComponentActivity() {
                             scannedTarget = target
                         }
                     },
+                    scanSupported = arSupported,
                     // #42: 로그아웃·401 → 보정 중인 배치와 스캔 기록(벽·가구) 모두 지움
                     onSessionEnd = {
                         editLayout = null
@@ -197,6 +203,21 @@ class MainActivity : ComponentActivity() {
 
         if (!hasCameraPermission()) {
             cameraPermissionLauncher.launch(Manifest.permission.CAMERA)
+        }
+    }
+
+    /**
+     * #16: ARCore 지원 여부. 처음엔 확인 중(transient)일 수 있어서 끝날 때까지 다시 확인.
+     * 기기 자체가 미지원(UNSUPPORTED_DEVICE_NOT_CAPABLE)일 때만 막음 (설치 안 됨·버전 낮음은 스캔 때 설치 화면)
+     */
+    private fun checkArAvailability() {
+        lifecycleScope.launch {
+            var availability = ArCoreApk.getInstance().checkAvailability(this@MainActivity)
+            while (availability.isTransient) {
+                delay(200)
+                availability = ArCoreApk.getInstance().checkAvailability(this@MainActivity)
+            }
+            arSupported = availability != ArCoreApk.Availability.UNSUPPORTED_DEVICE_NOT_CAPABLE
         }
     }
 

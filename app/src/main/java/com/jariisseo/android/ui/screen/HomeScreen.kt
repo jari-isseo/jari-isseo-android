@@ -59,11 +59,15 @@ import com.jariisseo.android.ui.theme.Sage
 import com.jariisseo.android.ui.theme.SageInk
 import com.jariisseo.android.ui.theme.Sub
 
+/** #16: ARCore 미지원 기기 안내 */
+private const val NO_AR_MESSAGE = "이 기기는 AR 스캔을 지원하지 않아요 · 데모 배치로 둘러보세요"
+
 /**
  * #10: 시안 D ④ 홈. 빈자리 수는 서버 연동 후 (가짜 숫자 대신 "-")
  * #42: 제목 = 서버의 매장 이름 (불러오기 전·실패 시 "내 매장"). 가게 정보에서 돌아오면 다시 불러옴
  * #22: 오른쪽 위 [손님에게 알리기] → 공유 화면
  * #25: 층 목록 = 서버 배치의 층 (이름 · 테이블 수). 행을 누르면 층 관리 시트, [+] = 층 추가 (10개까지)
+ * #16: scanSupported = false(ARCore 미지원)면 [+]·[첫 층 스캔하기]·[다시 스캔]을 막고 안내 (보정·상태 관리는 그대로)
  */
 @Composable
 fun HomeScreen(
@@ -73,6 +77,7 @@ fun HomeScreen(
     onAddFloor: () -> Unit,
     onStore: () -> Unit,
     onShare: () -> Unit,
+    scanSupported: Boolean = true,
 ) {
     val context = LocalContext.current
     var storeName by remember { mutableStateOf<String?>(null) }
@@ -96,7 +101,9 @@ fun HomeScreen(
         }
     }
     fun addFloor() {
-        if ((floors?.size ?: 0) >= MAX_FLOORS) {
+        if (!scanSupported) {
+            Toast.makeText(context, NO_AR_MESSAGE, Toast.LENGTH_SHORT).show()
+        } else if ((floors?.size ?: 0) >= MAX_FLOORS) {
             Toast.makeText(context, "층은 ${MAX_FLOORS}개까지 만들 수 있어요", Toast.LENGTH_SHORT).show()
         } else {
             onAddFloor()
@@ -113,6 +120,7 @@ fun HomeScreen(
             onEdit = { managing = null; onEditFloor(FloorTarget.Existing(floor.id, floor.name)) },
             onRescan = { managing = null; onRescanFloor(FloorTarget.Existing(floor.id, floor.name)) },
             onChanged = { managing = null; floorsAttempt++ },
+            scanSupported = scanSupported,
         )
     }
 
@@ -168,7 +176,11 @@ fun HomeScreen(
                         PillTab("다시 시도", selected = true) { floorsAttempt++ }
                     }
                     list == null -> Text("층을 불러오는 중…", fontSize = 14.sp, color = Sub)
-                    list.isEmpty() -> CardRow("첫 층 스캔하기", "아직 스캔한 층이 없어요", onClick = ::addFloor)
+                    list.isEmpty() -> CardRow(
+                        "첫 층 스캔하기",
+                        if (scanSupported) "아직 스캔한 층이 없어요" else NO_AR_MESSAGE,
+                        onClick = ::addFloor,
+                    )
                     else -> list.forEach { floor ->
                         CardRow(floor.name, "테이블 ${floor.tables.size}개", onClick = { managing = floor })
                     }
@@ -204,7 +216,7 @@ fun HomeScreen(
                 .size(60.dp)
                 .shadow(10.dp, CircleShape)
                 .clip(CircleShape)
-                .background(Brown)
+                .background(if (scanSupported) Brown else Brown.copy(alpha = 0.35f))   // #16: 미지원이면 흐리게 (누르면 안내)
                 .semantics { contentDescription = "층 추가하고 스캔하기" }
                 .clickable(onClick = ::addFloor),
             contentAlignment = Alignment.Center,

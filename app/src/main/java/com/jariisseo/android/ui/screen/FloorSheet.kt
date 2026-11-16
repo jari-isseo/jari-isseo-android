@@ -53,6 +53,7 @@ fun FloorSheet(
     onEdit: () -> Unit,
     onRescan: () -> Unit,
     onChanged: () -> Unit,
+    scanSupported: Boolean = true,   // #16: false면 [다시 스캔] 비활성
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -83,7 +84,11 @@ fun FloorSheet(
             Text(floor.name, Modifier.padding(horizontal = 24.dp), fontSize = 20.sp, fontWeight = FontWeight.Black)
             Text("테이블 ${floor.tables.size}개", Modifier.padding(start = 24.dp, end = 24.dp, top = 4.dp, bottom = 8.dp), fontSize = 14.sp, color = Sub)
             SheetAction("보정", enabled = !busy, onClick = onEdit)
-            SheetAction("다시 스캔", enabled = !busy, onClick = onRescan)
+            SheetAction(
+                if (scanSupported) "다시 스캔" else "다시 스캔 (이 기기는 AR 스캔을 지원하지 않아요)",
+                enabled = !busy && scanSupported,
+                onClick = onRescan,
+            )
             SheetAction("이름 바꾸기", enabled = !busy) { renaming = true }
             SheetAction("위로", enabled = !busy && index > 0) { run { Server.layouts.move(floor.id, up = true) } }
             SheetAction("아래로", enabled = !busy && index in 0 until count - 1) { run { Server.layouts.move(floor.id, up = false) } }

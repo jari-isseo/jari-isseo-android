@@ -55,6 +55,7 @@ fun AppNav(
     target: FloorTarget?,
     onTargetChange: (FloorTarget) -> Unit,
     onSelectFloor: (target: FloorTarget, scan: Boolean) -> Unit,
+    scanSupported: Boolean,   // #16: false = ARCore 미지원 기기 → 홈에서 스캔 입구를 막음
     onSessionEnd: () -> Unit,
 ) {
     val nav = rememberNavController()
@@ -117,6 +118,7 @@ fun AppNav(
                 onAddFloor = { nav.navigate(Route.FLOOR_ADD) { launchSingleTop = true } },
                 onStore = { nav.navigate(Route.STORE) { launchSingleTop = true } },
                 onShare = { nav.navigate(Route.SHARE) { launchSingleTop = true } },
+                scanSupported = scanSupported,
             )
         }
         composable(Route.FLOOR_ADD) {
