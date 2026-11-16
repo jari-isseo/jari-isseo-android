@@ -70,6 +70,40 @@ class ApiClientTest {
         assertEquals("""{"name":"카페 문 성수점"}""", req.body.readUtf8())
     }
 
+    /** #23: 영업 상태만 보냄 (name은 null이라 JSON에 없음) */
+    @Test
+    fun updateStore_patchesOpenOnly() = runTest {
+        server.enqueue(json(200, """{"publicId":"k3x9q2mf","name":"카페 문","open":false,"shareUrl":"http://x/s/k3x9q2mf","hasLayout":true}"""))
+
+        val store = apiCall { api.updateStore(UpdateStoreRequest(open = false)) }
+
+        assertEquals(false, store.open)
+        val req = server.takeRequest()
+        assertEquals("PATCH", req.method)
+        assertEquals("/api/owner/store", req.path)
+        assertEquals("""{"open":false}""", req.body.readUtf8())
+    }
+
+    /** #23: 전체 비우기 — 응답의 updatedAt·모르는 필드는 무시 */
+    @Test
+    fun resetStatuses_postsReset_andParsesSnapshot() = runTest {
+        server.enqueue(
+            json(
+                200,
+                """{"statuses":[{"tableId":"t-1","occupied":false,"updatedAt":"2026-11-16T09:00:00Z"},""" +
+                    """{"tableId":"t-2","occupied":false,"updatedAt":"2026-11-16T09:00:00Z"}],"lastUpdatedAt":"2026-11-16T09:00:00Z","extra":1}""",
+            ),
+        )
+
+        val res = apiCall { api.resetStatuses() }
+
+        assertEquals(listOf(StatusSnapshot.Item("t-1", false), StatusSnapshot.Item("t-2", false)), res.statuses)
+        val req = server.takeRequest()
+        assertEquals("POST", req.method)
+        assertEquals("/api/owner/tables/status/reset", req.path)
+        assertEquals("Bearer tok-123", req.getHeader("Authorization"))
+    }
+
     @Test
     fun storeNameError_matchesServerRules() {
         assertEquals("매장 이름을 입력해 주세요", storeNameError(""))
