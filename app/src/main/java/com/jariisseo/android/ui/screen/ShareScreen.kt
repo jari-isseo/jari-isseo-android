@@ -32,6 +32,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -67,6 +68,9 @@ import com.jariisseo.android.ui.theme.Ink
 import com.jariisseo.android.ui.theme.Sage
 import com.jariisseo.android.ui.theme.SageInk
 import com.jariisseo.android.ui.theme.Sub
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 /**
  * #22: 시안 D 공유 (홈 오른쪽 위 [손님에게 알리기]). 서버가 준 shareUrl 복사·공유 시트, QR 표시·사진 저장.
@@ -93,10 +97,19 @@ fun ShareScreen(onBack: () -> Unit) {
     val qr = remember(url) { url?.let { qrMatrix(it).toBitmap(1024) } }
     fun toast(text: String) = Toast.makeText(context, text, Toast.LENGTH_SHORT).show()
 
+    val scope = rememberCoroutineScope()
+    var saving by remember { mutableStateOf(false) }
     fun saveQr() {
         val bitmap = qr ?: return
-        val ok = savePngToGallery(context, bitmap, "자리있어_QR_${store?.publicId}")
-        toast(if (ok) "QR을 사진에 저장했어요" else "QR을 저장하지 못했어요")
+        if (saving) return   // 저장 중 다시 눌러도 한 번만
+        saving = true
+        val name = "자리있어_QR_${store?.publicId}"
+        scope.launch {
+            // PNG 압축·파일 쓰기는 IO 스레드에서, 토스트는 화면 스레드로 돌아와서
+            val ok = withContext(Dispatchers.IO) { savePngToGallery(context, bitmap, name) }
+            saving = false
+            toast(if (ok) "QR을 사진에 저장했어요" else "QR을 저장하지 못했어요")
+        }
     }
     // Android 9 이하만 저장 권한이 필요 (10+는 바로 저장)
     val askPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
