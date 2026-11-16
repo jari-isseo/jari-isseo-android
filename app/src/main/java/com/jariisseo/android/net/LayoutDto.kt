@@ -4,7 +4,9 @@ import com.jariisseo.android.ChairItem
 import com.jariisseo.android.Layout
 import com.jariisseo.android.TABLE_SIZE_M
 import com.jariisseo.android.TableItem
+import com.jariisseo.android.newId
 import kotlinx.serialization.Serializable
+import kotlin.random.Random
 import kotlin.math.roundToInt
 import kotlin.math.roundToLong
 
@@ -75,27 +77,101 @@ fun Layout.toFloorDto(name: String, order: Int): FloorDto = FloorDto(
 
 private fun cm(v: Float): Double = (v * 100.0).roundToLong() / 100.0 + 0.0   // + 0.0: -0.0 → 0.0
 
-/** 저장할 배치 전체 + 이 저장으로 한 층의 테이블 상태가 초기화되는지 (재스캔) */
-data class PendingLayout(val layout: LayoutDto, val resetsStatus: Boolean)
+/**
+ * 저장할 배치 전체 + 이 저장으로 한 층의 테이블 상태가 초기화되는지 (재스캔) + 저장될 그 층의 id
+ */
+data class PendingLayout(val layout: LayoutDto, val resetsStatus: Boolean, val floorId: String)
 
-const val DEFAULT_FLOOR_NAME = "1층"
+/** #25: 서버 검증 규칙 (층 1~10개, 이름 1~20자) */
+const val MAX_FLOORS = 10
+private const val MAX_FLOOR_NAME = 20
+
+/**
+ * #25: 지금 작업하는(스캔·보정) 층.
+ * Existing = 서버에 있는 층 (보정·다시 스캔), New = 새로 추가할 층 (스캔 후 첫 저장 때 서버에 생김. 빈 층은 저장할 수 없음)
+ */
+sealed interface FloorTarget {
+    val name: String
+
+    data class Existing(val id: String, override val name: String) : FloorTarget
+    data class New(override val name: String) : FloorTarget
+}
 
 /**
  * 서버 배치(모든 층)에 지금 고친 층 하나만 끼워 넣음. 다른 층은 그대로 → 그 층 테이블 상태 유지.
- * - 서버 배치 없음 → 층 1개 ("1층", order 0)
- * - 같은 floorId 층이 있음 (다시 보정) → 그 층만 교체, 이름·순서 유지
- * - 없음 (다시 스캔해서 floorId가 새로 생김) → 첫 층(order 최소)을 교체, 이름·순서 유지.
- *   그 층에 테이블이 있었다면 상태가 초기화됨 (층 선택은 #25 전이라 앱은 첫 층만 다룸)
+ * - 서버 배치 없음 → 그 층 하나 (order 0)
+ * - Existing → 그 id의 층만 교체, id·이름·순서는 서버 값 유지.
+ *   다시 스캔(앱 배치의 floorId가 새로 생김)이고 그 층에 테이블이 있었다면 상태가 초기화됨.
+ *   그새 그 층이 삭제됐으면 맨 뒤에 추가
+ * - New → 맨 뒤(order 최대 + 1)에 추가
+ * 서버는 테이블 id를 모든 층에서 유일하게 요구 → 다른 층과 겹치는 테이블·의자 id는 새로 만듦
  */
-fun withFloor(server: LayoutDto?, floor: Layout): PendingLayout {
-    if (server == null || server.floors.isEmpty()) {
-        return PendingLayout(LayoutDto(floors = listOf(floor.toFloorDto(DEFAULT_FLOOR_NAME, 0))), resetsStatus = false)
+fun withFloor(server: LayoutDto?, floor: Layout, target: FloorTarget, random: Random = Random.Default): PendingLayout {
+    val others = server?.floors.orEmpty().filterNot { target is FloorTarget.Existing && it.id == target.id }
+    val replacing = (target as? FloorTarget.Existing)?.let { t -> server?.floors?.firstOrNull { it.id == t.id } }
+    val floorId = when {
+        target is FloorTarget.Existing -> target.id
+        others.any { it.id == floor.floorId } -> newId("f-", others.map { it.id }.toSet(), random)
+        else -> floor.floorId
     }
-    val target = server.floors.firstOrNull { it.id == floor.floorId } ?: server.floors.minBy { it.order }
-    val replaced = server.floors.map { if (it === target) floor.toFloorDto(target.name, target.order) else it }
-    val rescanned = target.id != floor.floorId
-    return PendingLayout(server.copy(floors = replaced), resetsStatus = rescanned && target.tables.isNotEmpty())
+    val fixed = withUniqueItemIds(floor.copy(floorId = floorId), others, random)
+    val dto = fixed.toFloorDto(
+        name = replacing?.name ?: target.name.trim(),
+        order = replacing?.order ?: ((others.maxOfOrNull { it.order } ?: -1) + 1),
+    )
+    val floors = if (replacing != null) server!!.floors.map { if (it.id == floorId) dto else it } else others + dto
+    val rescanned = replacing != null && floor.floorId != replacing.id
+    return PendingLayout(
+        (server ?: LayoutDto(floors = emptyList())).copy(floors = floors),
+        resetsStatus = rescanned && replacing!!.tables.isNotEmpty(),
+        floorId = floorId,
+    )
 }
 
-/** 앱이 다루는 층 (#25 전: 첫 층) */
-fun LayoutDto.currentFloor(): FloorDto? = floors.minByOrNull { it.order }
+/** 다른 층의 테이블·의자 id와 겹치는 것만 새 id로 (겹치지 않으면 그대로 → 상태 유지) */
+private fun withUniqueItemIds(floor: Layout, others: List<FloorDto>, random: Random): Layout {
+    val used = others.flatMap { f -> f.tables.map { it.id } + f.chairs.map { it.id } }.toMutableSet()
+    val taken = used.toSet()
+    if ((floor.tables.map { it.id } + floor.chairs.map { it.id }).none { it in taken }) return floor
+    used += floor.tables.map { it.id } + floor.chairs.map { it.id }
+    fun fresh(id: String, prefix: String) = if (id in taken) newId(prefix, used, random).also { used += it } else id
+    return floor.copy(
+        tables = floor.tables.map { it.copy(id = fresh(it.id, "t-")) },
+        chairs = floor.chairs.map { it.copy(id = fresh(it.id, "c-")) },
+    )
+}
+
+/** #25: 층 이름만 바꿈 (상태 유지) */
+fun LayoutDto.renameFloor(id: String, name: String): LayoutDto =
+    copy(floors = floors.map { if (it.id == id) it.copy(name = name.trim()) else it })
+
+/** #25: 순서상 위(up)·아래 이웃 층과 order 값을 맞바꿈. 맨 끝이면 그대로 */
+fun LayoutDto.moveFloor(id: String, up: Boolean): LayoutDto {
+    val sorted = floors.sortedBy { it.order }
+    val i = sorted.indexOfFirst { it.id == id }
+    val j = if (up) i - 1 else i + 1
+    if (i < 0 || j !in sorted.indices) return this
+    val a = sorted[i]
+    val b = sorted[j]
+    return copy(floors = floors.map { if (it.id == a.id) it.copy(order = b.order) else if (it.id == b.id) it.copy(order = a.order) else it })
+}
+
+/** #25: 층 삭제 (그 층 테이블 상태도 서버에서 지워짐). 서버는 층 0개를 거부 → 마지막 층은 못 지움 */
+fun LayoutDto.removeFloor(id: String): LayoutDto {
+    val rest = floors.filterNot { it.id == id }
+    require(rest.isNotEmpty()) { "마지막 층은 삭제할 수 없어요" }
+    return copy(floors = rest)
+}
+
+/** #25: 서버 검증과 같은 기준 (앞뒤 공백 제거 후 1~20자). 문제없으면 null */
+fun floorNameError(name: String): String? = when {
+    name.isBlank() -> "층 이름을 입력해 주세요"
+    name.trim().length > MAX_FLOOR_NAME -> "층 이름은 ${MAX_FLOOR_NAME}자까지예요"
+    else -> null
+}
+
+/** #25: 새 층 기본 이름 = 아직 안 쓴 "n층" 중 가장 작은 n */
+fun nextFloorName(names: List<String>): String {
+    val used = names.map { it.trim() }.toSet()
+    return generateSequence(1) { it + 1 }.map { "${it}층" }.first { it !in used }
+}

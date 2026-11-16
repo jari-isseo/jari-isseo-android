@@ -14,7 +14,9 @@ import androidx.compose.ui.Modifier
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
+import com.jariisseo.android.net.FloorTarget
 import com.jariisseo.android.net.Server
+import com.jariisseo.android.ui.screen.FloorAddScreen
 import com.jariisseo.android.ui.screen.EditScreen
 import com.jariisseo.android.ui.screen.HomeScreen
 import com.jariisseo.android.ui.screen.LoginScreen
@@ -25,7 +27,7 @@ import com.jariisseo.android.ui.screen.ViewScreen
 import com.jariisseo.android.ui.theme.Bg
 import kotlinx.coroutines.flow.first
 
-/** #10: 화면 이름 (층 단위 라우트는 #25) */
+/** #10: 화면 이름. #25: 작업 중인 층은 라우트 인자 대신 MainActivity가 들고 있음 (스캔 화면을 MainActivity가 그려서) */
 object Route {
     const val LOGIN = "login"
     const val SIGNUP = "signup"   // #12
@@ -35,6 +37,7 @@ object Route {
     const val VIEW = "view"   // 사장님 뷰
     const val STORE = "store"   // #42: 가게 정보
     const val SHARE = "share"   // #22: 손님에게 알리기 (링크·QR)
+    const val FLOOR_ADD = "floor-add"   // #25: 새 층 이름 → 스캔
 }
 
 /**
@@ -49,6 +52,9 @@ fun AppNav(
     scanContent: @Composable (onClose: () -> Unit, onDone: () -> Unit) -> Unit,
     layout: Layout?,
     onLayoutChange: (Layout) -> Unit,
+    target: FloorTarget?,
+    onTargetChange: (FloorTarget) -> Unit,
+    onSelectFloor: (target: FloorTarget, scan: Boolean) -> Unit,
     onSessionEnd: () -> Unit,
 ) {
     val nav = rememberNavController()
@@ -98,11 +104,29 @@ fun AppNav(
         composable(Route.HOME) {
             HomeScreen(
                 onView = { nav.navigate(Route.VIEW) },
-                onEdit = { nav.navigate(Route.EDIT) },
+                // #25: 층 보정 / 다시 스캔 / 새 층
+                onEditFloor = { t ->
+                    onSelectFloor(t, false)
+                    nav.navigate(Route.EDIT) { launchSingleTop = true }
+                },
                 // 빠르게 두 번 눌러도 스캔이 쌓이지 않게 (두 스캔 화면이 같은 glView를 붙이면 크래시)
-                onScan = { nav.navigate(Route.SCAN) { launchSingleTop = true } },
+                onRescanFloor = { t ->
+                    onSelectFloor(t, true)
+                    nav.navigate(Route.SCAN) { launchSingleTop = true }
+                },
+                onAddFloor = { nav.navigate(Route.FLOOR_ADD) { launchSingleTop = true } },
                 onStore = { nav.navigate(Route.STORE) { launchSingleTop = true } },
                 onShare = { nav.navigate(Route.SHARE) { launchSingleTop = true } },
+            )
+        }
+        composable(Route.FLOOR_ADD) {
+            FloorAddScreen(
+                onBack = { nav.popBackStack() },
+                onStart = { name ->
+                    onSelectFloor(FloorTarget.New(name), true)
+                    // 스캔에서 X로 닫으면 홈으로 (층 추가 화면은 건너뜀)
+                    nav.navigate(Route.SCAN) { popUpTo(Route.HOME); launchSingleTop = true }
+                },
             )
         }
         composable(Route.STORE) {
@@ -118,6 +142,8 @@ fun AppNav(
             EditScreen(
                 layout = layout,
                 onChange = onLayoutChange,
+                floorTarget = target,
+                onTargetChange = onTargetChange,
                 onBack = { nav.popBackStack() },
                 onSaved = { nav.navigate(Route.VIEW) { popUpTo(Route.HOME) } },   // #15: 서버 저장 성공 후. 뒤로 가기 = 홈
             )

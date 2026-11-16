@@ -72,7 +72,7 @@ private enum class ViewerState { LOADING, READY, ERROR }
 private const val READY_TIMEOUT_MS = 10_000L
 
 /**
- * #10: 시안 D ⑦ 사장님 뷰. 층 탭은 #25.
+ * #10: 시안 D ⑦ 사장님 뷰. #25: 층 탭은 웹이 그림.
  * #17: 배치도 = 손님 웹과 같은 페이지를 WebView 사장님 모드로 (내 매장 publicId → /s/{publicId}?mode=owner).
  *   웹이 다 그리면 OwnerBridge.onReady로 로딩 덮개를 걷음. 못 불러오면 에러 + [다시 시도]
  * #18: 테이블 탭 → PUT 상태 전환 → 성공 applyStatus / 실패 revertStatus + 토스트
@@ -173,9 +173,7 @@ fun ViewScreen(onBack: () -> Unit) {
             }
         }
 
-        Row(Modifier.padding(start = 20.dp, top = 18.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            PillTab("1층", selected = true, onClick = {})
-        }
+        // #25: 층 이동은 웹의 층 탭 (사장님 모드도 층이 2개 이상이면 보임) → 앱에는 층 탭 없음
 
         // 빈자리 요약 (작은 세이지 카드). 숫자는 웹이 OwnerBridge.onSummary로 알려줌 (server#49 전에는 "-").
         //   웹은 사장님 모드에서 배치도만 그리고 요약 문구는 숨김 → 배치도를 크게

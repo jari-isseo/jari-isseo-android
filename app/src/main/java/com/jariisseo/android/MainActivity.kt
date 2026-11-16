@@ -65,6 +65,7 @@ import com.google.ar.core.ArCoreApk
 import com.google.ar.core.Config
 import com.google.ar.core.Session
 import com.google.ar.core.exceptions.CameraNotAvailableException
+import com.jariisseo.android.net.FloorTarget
 import com.jariisseo.android.net.Server
 import com.jariisseo.android.ui.BigNumber
 import com.jariisseo.android.ui.CircleButton
@@ -86,6 +87,8 @@ class MainActivity : ComponentActivity() {
     private var uiState by mutableStateOf(ArUiState())
     private var modelInfo by mutableStateOf("모델 로딩 중...")   // ★ 8교시
     private var editLayout by mutableStateOf<Layout?>(null)    // #13: 보정 중인 배치 ([스캔 완료] 때 새로 만듦)
+    private var editTarget by mutableStateOf<FloorTarget?>(null)   // #25: 스캔·보정 중인 층
+    private var scannedTarget: FloorTarget? = null                 // #25: renderer에 남아 있는 스캔 기록(벽·가구)이 어느 층 것인지
 
     private var session: Session? = null          // ARCore 엔진. 처음엔 없음(null)
     private var installRequested = false          // AR 서비스 설치 화면을 이미 띄웠는지
@@ -148,16 +151,30 @@ class MainActivity : ComponentActivity() {
                 AppNav(
                     scanContent = { onClose, onDone ->
                         // #13: [스캔 완료] = 지금 스캔 결과로 보정할 배치를 새로 만들고 보정 화면으로 (이전 보정 내용은 덮어씀)
-                        ScanScreen(onClose) {
+                        //   새 floorId가 생김 → 저장 때 기존 층이면 "다시 스캔"으로 판단 (withFloor)
+                        ScanScreen(editTarget?.name.orEmpty(), onClose) {
                             editLayout = layoutOf(uiState)
                             onDone()
                         }
                     },
                     layout = editLayout,
                     onLayoutChange = { editLayout = it },
+                    target = editTarget,
+                    onTargetChange = { editTarget = it },
+                    // #25: 다른 층을 고르면 저장 안 한 보정 배치를 버림. 다른 층을 스캔하면 이전 스캔 기록도 지움
+                    onSelectFloor = { target, scan ->
+                        if (target != editTarget) editLayout = null
+                        editTarget = target
+                        if (scan && target != scannedTarget) {
+                            renderer.clear()
+                            scannedTarget = target
+                        }
+                    },
                     // #42: 로그아웃·401 → 보정 중인 배치와 스캔 기록(벽·가구) 모두 지움
                     onSessionEnd = {
                         editLayout = null
+                        editTarget = null
+                        scannedTarget = null
                         renderer.clear()
                     },
                 )
@@ -170,7 +187,7 @@ class MainActivity : ComponentActivity() {
     }
 
     @Composable
-    private fun ScanScreen(onClose: () -> Unit, onDone: () -> Unit) {
+    private fun ScanScreen(floorName: String, onClose: () -> Unit, onDone: () -> Unit) {
         val state = uiState
 
         // #10: 스캔 화면에 들어오면 AR 시작, 나가면 정지 (벽·가구 기록은 renderer에 유지)
@@ -230,8 +247,14 @@ class MainActivity : ComponentActivity() {
                     Box(Modifier.align(Alignment.CenterStart)) {
                         CircleButton(Glyph.CLOSE, "스캔 그만두기", onClose, fill = Color.White.copy(alpha = 0.16f), tint = Color.White)
                     }
-                    Text("1층 스캔", Modifier.align(Alignment.Center), color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.Bold)
+                    Text("$floorName 스캔", Modifier.align(Alignment.Center), color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.Bold)
                 }
+                // #25: 계단에서는 위치 추적이 끊김
+                Text(
+                    "한 층씩 따로 스캔해 주세요",
+                    Modifier.align(Alignment.CenterHorizontally),
+                    color = Color.White.copy(alpha = 0.8f), fontSize = 13.sp,
+                )
                 StepIndicator(step = if (state.outlineClosed) 2 else 1, modifier = Modifier.align(Alignment.CenterHorizontally).padding(top = 8.dp))
                 // 개발용 정보 (추적 상태·평면·모델·추론·두 점 거리)
                 Column(
