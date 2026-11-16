@@ -114,7 +114,8 @@ fun EditScreen(
     fun commit(before: Layout, after: Layout) { push(before); onChange(after) }
     fun previewRotation(base: Layout) = onChange(rotateLayout(base, quarter * 90f + fine))
     val editing = layout?.tables?.firstOrNull { it.id == editingId }
-    val floorProblem = layout?.let(::floorError)                       // #26: 저장할 수 없는 바닥이면 이유
+    // #26: 저장할 수 없는 바닥이면 이유. 저장 때 보내는 그대로(0 이상으로 옮긴 뒤) 검사 → cm 반올림 결과가 같음
+    val floorProblem = layout?.let { floorError(normalizeOrigin(it)) }
     val outsideCount = layout?.let { tablesOutsideFloor(it).size } ?: 0  // #26: 바닥 밖 테이블 수 (경고만)
 
     // #15: 서버 저장·불러오기
@@ -198,7 +199,7 @@ fun EditScreen(
                 contentAlignment = Alignment.Center,
             ) { Text(if (saving) "저장 중…" else "저장", color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.Bold) }
         }
-        (message ?: floorProblem)?.let { Text(it, Modifier.padding(start = 24.dp, end = 24.dp, top = 10.dp), color = Danger, fontSize = 14.sp) }
+        message?.let { Text(it, Modifier.padding(start = 24.dp, end = 24.dp, top = 10.dp), color = Danger, fontSize = 14.sp) }
 
         // 편집 시트가 열려 있으면 제목·모드를 접어 배치도를 위로 올림 (시트에 가려지지 않게, 탑뷰 포커스와 같은 길이)
         AnimatedVisibility(
@@ -274,6 +275,20 @@ fun EditScreen(
                     onFloorPointAdd = { edge -> commit(layout, addFloorPoint(layout, edge)) },
                     onFloorPointDelete = { i -> if (layout.floor.size > 3) commit(layout, removeFloorPoint(layout, i)) },
                 )
+                // #26: 배치도 안에 겹쳐 띄움 → 끄는 중에 문구가 생겨도 배치도 크기가 안 바뀌어 화면이 튀지 않음
+                floorProblem?.let {
+                    Text(
+                        it,
+                        Modifier
+                            .align(Alignment.TopCenter)
+                            .padding(top = 14.dp, start = 16.dp, end = 16.dp)
+                            .clip(CircleShape)
+                            .background(Color.White)
+                            .border(1.5.dp, Danger, CircleShape)
+                            .padding(horizontal = 14.dp, vertical = 6.dp),
+                        fontSize = 13.sp, color = Danger, fontWeight = FontWeight.Bold,
+                    )
+                }
                 if (outsideCount > 0) {
                     Text(
                         "바닥 밖 테이블 ${outsideCount}개",

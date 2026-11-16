@@ -47,6 +47,7 @@ import com.jariisseo.android.hitTable
 import com.jariisseo.android.moveChair
 import com.jariisseo.android.moveFloorPoint
 import com.jariisseo.android.moveTable
+import com.jariisseo.android.normalizeOrigin
 import com.jariisseo.android.tablesOutsideFloor
 import com.jariisseo.android.ui.theme.Brown
 import com.jariisseo.android.ui.theme.Danger
@@ -252,6 +253,7 @@ fun TopView(
         val t = transform ?: return@Canvas
 
         // 바닥 (연한 세이지 + 테두리)
+        val floorInvalid = floorError(normalizeOrigin(layout)) != null   // 저장 검사와 같은 기준 (EditScreen)
         if (layout.floor.size >= 3) {
             val path = Path().apply {
                 layout.floor.forEachIndexed { i, (x, z) ->
@@ -262,12 +264,12 @@ fun TopView(
             }
             drawPath(path, FloorFill)
             // #26: 꼬인 바닥(저장 불가)은 빨간 테두리
-            drawPath(path, if (floorError(layout) != null) Danger else FloorEdge, style = Stroke(width = 2.dp.toPx()))
+            drawPath(path, if (floorInvalid) Danger else FloorEdge, style = Stroke(width = 2.dp.toPx()))
         }
 
-        // 벽
+        // 벽. #26: 벽 = 바닥 각 변이라 바닥 테두리를 덮음 → 꼬인 바닥이면 벽도 빨간색
         layout.walls.forEach { (a, b) ->
-            drawLine(WallColor, t.toScreen(a.first, a.second), t.toScreen(b.first, b.second), strokeWidth = 4.dp.toPx(), cap = StrokeCap.Round)
+            drawLine(if (floorInvalid) Danger else WallColor, t.toScreen(a.first, a.second), t.toScreen(b.first, b.second), strokeWidth = 4.dp.toPx(), cap = StrokeCap.Round)
         }
 
         // 의자 (작은 원, 선택 = 세이지 + 링)

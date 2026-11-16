@@ -69,6 +69,14 @@ class FloorEditTest {
     }
 
     @Test
+    fun floorError_checksNormalizedFloor() {
+        // 원래 좌표로는 통과하지만, 0 이상으로 옮긴 뒤 cm 반올림하면 (0, 2)가 두 번 연속 → 서버가 거부
+        val l = layout(listOf(0.004f to 0f, 4f to 0f, 4f to 4f, 0.006f to 4f, 0.006f to 2f, 0.004f to 2f))
+        assertNull(floorError(l))
+        assertNotNull(floorError(normalizeOrigin(l)))
+    }
+
+    @Test
     fun tablesOutsideFloor_findsEmptyCorner() {
         val inside = TableItem("t-in", "1번", 1f, 1f)
         val corner = TableItem("t-out", "2번", 3f, 3f)
