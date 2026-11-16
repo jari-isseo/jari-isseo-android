@@ -29,6 +29,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -63,6 +64,7 @@ import com.jariisseo.android.ui.web.OwnerWebView
 import com.jariisseo.android.ui.web.applyStatusJs
 import com.jariisseo.android.ui.web.revertStatusJs
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 
 private enum class ViewerState { LOADING, READY, ERROR }
@@ -93,6 +95,7 @@ fun ViewScreen(onBack: () -> Unit) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val pending = remember { mutableSetOf<String>() }                // #18: 상태 전환 요청 중인 테이블
+    val skipReset = remember { mutableSetOf<String>() }              // #23: 비우기 중 탭한 테이블 → 비우기 결과로 덮지 않음
 
     // #19: 뷰에 있는 동안 화면 꺼짐 방지 (나가면 해제)
     DisposableEffect(Unit) {
@@ -109,6 +112,10 @@ fun ViewScreen(onBack: () -> Unit) {
         state = ViewerState.LOADING
         url = null
         summary = null
+        // [다시 시도] 때 토글 저장(PATCH)이 진행 중이면 끝나길 기다림 → 늦게 온 GET이 토글 결과를 옛 값으로 덮지 않게.
+        //   불러오는 동안은 토글을 "확인 중"으로 막음
+        snapshotFlow { togglingOpen }.first { !it }
+        open = null
         try {
             val store = apiCall { Server.api.myStore() }
             open = store.open
@@ -211,6 +218,7 @@ fun ViewScreen(onBack: () -> Unit) {
                         onReady = { if (state == ViewerState.LOADING) state = ViewerState.READY },
                         onTableTap = onTableTap@{ webView, tableId, occupied ->
                             if (!pending.add(tableId)) return@onTableTap   // 요청 중인 테이블은 무시
+                            if (resetting) skipReset.add(tableId)
                             scope.launch {
                                 try {
                                     val res = apiCall { Server.api.changeStatus(tableId, UpdateStatusRequest(!occupied)) }
@@ -260,11 +268,17 @@ fun ViewScreen(onBack: () -> Unit) {
                 TextButton(onClick = {
                     confirmReset = false
                     resetting = true
+                    // 이미 요청 중이거나 비우는 동안 탭한 테이블은 비우기보다 나중에 처리될 수 있음 → 그 탭 결과·SSE에 맡김
+                    skipReset.clear()
+                    skipReset.addAll(pending)
                     scope.launch {
                         try {
                             val res = apiCall { Server.api.resetStatuses() }
                             // 손님 웹은 SSE로 바뀜. 내 배치도는 응답대로 바로 (웹이 아직 없으면 SSE에 맡김)
-                            webView[0]?.takeIf { state == ViewerState.READY }?.let { w -> res.statuses.forEach { w.evaluateJavascript(applyStatusJs(it.tableId, it.occupied), null) } }
+                            webView[0]?.takeIf { state == ViewerState.READY }?.let { w ->
+                                res.statuses.filter { it.tableId !in skipReset }
+                                    .forEach { w.evaluateJavascript(applyStatusJs(it.tableId, it.occupied), null) }
+                            }
                             Toast.makeText(context, "모든 테이블을 비웠어요", Toast.LENGTH_SHORT).show()
                         } catch (e: ApiException) {
                             Toast.makeText(context, e.displayMessage(), Toast.LENGTH_SHORT).show()
