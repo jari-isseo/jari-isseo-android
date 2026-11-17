@@ -108,6 +108,7 @@ fun Layout.points(): List<Pair<Float, Float>> =
  * focusId: 편집 시트가 아래를 가리는 동안 그 테이블을 위쪽(높이 1/4)으로 옮기며 확대하고 선택 표시 (애니메이션)
  * #26: floorEditable이면 테이블·의자 대신 바닥 꼭짓점을 끌어서 이동, 변 가운데(+) 탭 = onFloorPointAdd,
  *   꼭짓점 길게 누름 = onFloorPointDelete. 꼬인 바닥은 빨간 테두리, 바닥 밖 테이블은 빨간 링 (두 모드 모두)
+ * #65: 배치 아래쪽에 입구 표시 (그리기만, 터치는 아래 배치·화면 이동이 그대로 받음)
  */
 @Composable
 fun TopView(
@@ -138,7 +139,7 @@ fun TopView(
     val pointAdd by rememberUpdatedState(onFloorPointAdd)
     val pointDelete by rememberUpdatedState(onFloorPointDelete)
     val textMeasurer = rememberTextMeasurer()
-    val padding = with(LocalDensity.current) { 28.dp.toPx() }
+    val padding = with(LocalDensity.current) { 36.dp.toPx() }   // #65: 아래 여백에 입구 표시가 들어가게 (28 → 36)
 
     // focusId가 생기면 0 → 1, 없어지면 1 → 0 (편집 시트·제목 숨김과 같은 길이). 닫힐 때도 그 테이블 기준으로 돌아가게 기억
     val focusProgress by animateFloatAsState(if (focusId != null) 1f else 0f, tween(FOCUS_ANIM_MS), label = "focus")
@@ -316,6 +317,23 @@ fun TopView(
                 TextStyle(color = if (isSelected) SageInk else Color.White, fontSize = 13.sp, fontWeight = FontWeight.Black),
             )
             drawText(label, topLeft = Offset(c.x - label.size.width / 2f, c.y - label.size.height / 2f))
+        }
+
+        // #65: 입구 = 배치 아래쪽 (회전 모드의 "입구가 화면 아래쪽" 약속). 배치 바로 아래 가운데에 ▲ + "입구"
+        val pts = layout.points()
+        if (pts.isNotEmpty()) {
+            val bottom = t.toScreen((pts.minOf { it.first } + pts.maxOf { it.first }) / 2, pts.maxOf { it.second })
+            val tipY = bottom.y + 6.dp.toPx()
+            val half = 5.dp.toPx()
+            val arrow = Path().apply {
+                moveTo(bottom.x, tipY)
+                lineTo(bottom.x - half, tipY + half)
+                lineTo(bottom.x + half, tipY + half)
+                close()
+            }
+            drawPath(arrow, WallColor)
+            val label = textMeasurer.measure("입구", TextStyle(color = WallColor, fontSize = 12.sp, fontWeight = FontWeight.Bold))
+            drawText(label, topLeft = Offset(bottom.x - label.size.width / 2f, tipY + half + 1.dp.toPx()))
         }
 
         // #26: 바닥 모양 모드 = 변 가운데 +(추가), 꼭짓점 흰 점(끌기·길게 눌러 삭제)
