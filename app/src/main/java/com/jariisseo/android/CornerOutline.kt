@@ -129,8 +129,15 @@ object CornerOutline {
         val q = edges(outline).map { (a, b) -> closest(a, b, p) }.minBy { dist(p, it) }
         val d = dist(p, q)
         if (d == 0f) return q
-        // p → q 방향 = 벽을 넘어 안쪽으로 들어가는 방향
-        return q.first + (q.first - p.first) / d * inset to q.second + (q.second - p.second) / d * inset
+        // p → q 방향 = 벽을 넘어 안쪽으로 들어가는 방향 (변 위의 점이면)
+        val r = q.first + (q.first - p.first) / d * inset to q.second + (q.second - p.second) / d * inset
+        if (FloorPolygon.contains(outline, r.first, r.second)) return r
+        // 예각 꼭짓점이 가장 가까우면 p → q 방향이 안쪽이 아닐 수 있음 → 꼭짓점들의 중심 쪽으로
+        val cx = outline.sumOf { it.first.toDouble() }.toFloat() / outline.size
+        val cz = outline.sumOf { it.second.toDouble() }.toFloat() / outline.size
+        val c = dist(q, cx to cz)
+        if (c == 0f) return q
+        return q.first + (cx - q.first) / c * inset to q.second + (cz - q.second) / c * inset
     }
 
     /** 점 p와 선분 ab 사이 거리 */

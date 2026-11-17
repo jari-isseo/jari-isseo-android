@@ -97,13 +97,19 @@ fun hitChair(layout: Layout, x: Float, z: Float, slop: Float = 0f, radius: Float
 
 const val CHAIR_RADIUS_M = 0.2f
 /**
- * 테이블에 붙은 의자: 테이블 변에서 의자 지름 안쪽에 있고, 중심이 가장 가까운 테이블이 이 테이블인 것.
- * (스키마에 의자-테이블 연결이 없어 위치로 판단)
+ * 테이블에 붙은 의자: 테이블 가장자리에서 의자 지름 안에 있고, 가장자리가 가장 가까운 테이블이 이 테이블인 것.
+ * (스키마에 의자-테이블 연결이 없어 위치로 판단. 중심 거리로 고르면 긴 테이블 끝 의자가 옆 테이블 것이 됨)
  */
 fun chairsOf(layout: Layout, t: TableItem): List<ChairItem> = layout.chairs.filter { c ->
-    val (lx, lz) = toTableLocal(t, c.x, c.z)
-    abs(lx) <= t.width / 2 + 2 * CHAIR_RADIUS_M && abs(lz) <= t.depth / 2 + 2 * CHAIR_RADIUS_M &&
-        layout.tables.minByOrNull { hypot(it.x - c.x, it.z - c.z) }?.id == t.id
+    edgeDistance(t, c.x, c.z) <= 2 * CHAIR_RADIUS_M &&
+        layout.tables.minByOrNull { edgeDistance(it, c.x, c.z) }?.id == t.id
+}
+
+/** (x, z)에서 테이블 가장자리까지 거리 (안쪽이면 0). 원형은 chairSpots와 같은 반지름 max(가로, 세로) / 2 */
+private fun edgeDistance(t: TableItem, x: Float, z: Float): Float {
+    val (lx, lz) = toTableLocal(t, x, z)
+    return if (t.shape == "ROUND") max(hypot(lx, lz) - max(t.width, t.depth) / 2, 0f)
+    else hypot(max(abs(lx) - t.width / 2, 0f), max(abs(lz) - t.depth / 2, 0f))
 }
 
 /**

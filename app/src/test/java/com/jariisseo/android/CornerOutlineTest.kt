@@ -132,6 +132,15 @@ class CornerOutlineTest {
     }
 
     @Test
+    fun pullInside_acuteCorner_endsInside() {
+        // (0, 0) 꼭짓점이 예각 → p → 꼭짓점 방향으로 밀면 아직 밖
+        val triangle = listOf(0f to 0f, 4f to 0f, 4f to 3f)
+        val p = CornerOutline.pullInside(triangle, -0.1f to 0.1f, 0.4f)
+
+        assertTrue("$p", FloorPolygon.contains(triangle, p.first, p.second))
+    }
+
+    @Test
     fun segment_liesAlongWall() {
         val (a, b) = CornerOutline.segment(touch(2f, 0f, 0f, 1f))
 

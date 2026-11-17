@@ -4,6 +4,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import kotlin.math.abs
 
 class LayoutTest {
     private val state = ArUiState(
@@ -201,6 +202,28 @@ class LayoutTest {
         val layout = Layout("f-1", emptyList(), emptyList(), listOf(a, b), listOf(ChairItem("c-a", 1f, 1.6f), ChairItem("c-b", 3f, 1.6f)))
 
         assertEquals(listOf("c-b"), removeTable(layout, a.id).chairs.map { it.id })
+    }
+
+    @Test
+    fun chairsOf_roundTableWithUnequalSize_keepsItsChairs() {
+        val t = TableItem("t-1", "1번", 2f, 2f, width = 1.2f, depth = 0.3f, shape = "ROUND")
+        val empty = Layout("f-1", emptyList(), emptyList(), listOf(t), emptyList())
+
+        assertEquals(1, chairsOf(setChairCount(empty, t.id, 1), t).size)
+        val twice = setChairCount(setChairCount(empty, t.id, 1), t.id, 2)
+        assertEquals(2, twice.chairs.size)   // 다시 늘려도 쌓이지 않음
+        assertEquals(2, chairsOf(twice, t).size)
+    }
+
+    @Test
+    fun chairsOf_longTableEndChair_notStolenByCloserCenter() {
+        val a = TableItem("t-a", "1번", 2f, 2f, width = 3f, depth = 0.8f)
+        val b = TableItem("t-b", "2번", 3.2f, 3.3f)
+        val layout = setChairCount(Layout("f-1", emptyList(), emptyList(), listOf(a, b), emptyList()), a.id, 3)
+
+        assertTrue(layout.chairs.any { abs(it.x - 2.75f) < 1e-4f && abs(it.z - 2.6f) < 1e-4f })   // 중심은 B가 더 가까운 의자
+        assertEquals(3, chairsOf(layout, a).size)
+        assertTrue(chairsOf(layout, b).isEmpty())
     }
 
     private fun assertSpots(expected: List<Pair<Float, Float>>, actual: List<Pair<Float, Float>>) {

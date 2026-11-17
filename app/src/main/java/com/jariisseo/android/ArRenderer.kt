@@ -100,7 +100,17 @@ class ArRenderer(
     private val detectExecutor = Executors.newSingleThreadExecutor()
     private val detecting = AtomicBoolean(false)          // 추론 중이면 새 프레임은 건너뜀
     /** 추론에 넣은 이미지를 찍은 순간의 카메라. intrinsics = [fx, fy, cx, cy] (CPU 이미지 기준) */
-    private class CaptureCamera(val pose: Pose, val intrinsics: FloatArray)
+    /**
+     * 추론하는 동안 ARCore가 월드 좌표를 보정할 수 있어 숫자 pose를 다음 프레임에 그대로 쓰면 안 됨
+     * → 기준 앵커(mapAnchor)에 대한 상대 pose로 들고 있다가, 쓸 때 앵커의 지금 pose로 되돌림.
+     * 앵커가 없으면(스캔 직후 등) 월드 pose 그대로
+     */
+    private class CaptureCamera(private val anchor: Anchor?, private val pose: Pose, val intrinsics: FloatArray) {
+        /** 지금 월드 좌표 기준 촬영 순간 카메라 pose. 앵커를 놓쳤으면 null */
+        fun currentPose(): Pose? =
+            if (anchor == null) pose
+            else anchor.takeIf { it.trackingState == TrackingState.TRACKING }?.pose?.compose(pose)
+    }
     /** 인식 결과 + 그 이미지를 찍은 카메라 (한 번에 바꿔야 GL 스레드가 섞인 값을 안 읽음) */
     private class DetectionBatch(val detections: List<Detection>, val camera: CaptureCamera?)
     @Volatile private var latest = DetectionBatch(emptyList(), null)
@@ -375,7 +385,9 @@ class ArRenderer(
             val k = camera.imageIntrinsics
             val f = k.focalLength
             val c = k.principalPoint
-            CaptureCamera(camera.pose, floatArrayOf(f[0], f[1], c[0], c[1]))
+            val anchor = trackedMapAnchor()
+            val pose = anchor?.pose?.inverse()?.compose(camera.pose) ?: camera.pose
+            CaptureCamera(anchor, pose, floatArrayOf(f[0], f[1], c[0], c[1]))
         } else null
 
         detectExecutor.execute {
@@ -414,17 +426,21 @@ class ArRenderer(
             if (batch.detections.isNotEmpty()) Log.d(TAG, "인식 버림: 촬영 순간 추적 아님 (%d개)".format(batch.detections.size))
             return
         }
+        val camPose = cam.currentPose() ?: run {   // 기준 앵커를 놓침 → 촬영 위치를 지금 좌표로 못 옮김
+            if (batch.detections.isNotEmpty()) Log.d(TAG, "인식 버림: 기준 앵커 추적 아님 (%d개)".format(batch.detections.size))
+            return
+        }
         // 진단: 추론하는 동안 카메라가 움직인 거리 (이 값이 클 때 인식이 빠지는지 확인용)
         val moved = frame.camera.pose.let { p ->
-            sqrt((p.tx() - cam.pose.tx()).let { it * it } + (p.tz() - cam.pose.tz()).let { it * it })
+            sqrt((p.tx() - camPose.tx()).let { it * it } + (p.tz() - camPose.tz()).let { it * it })
         }
         for (d in batch.detections) {
             val box = toView(frame, d)
-            // 박스 아래가 화면 밖으로 잘렸으면 진짜 바닥 접점을 모름 → 건너뜀
-            if (box.bottom > viewportHeight - EDGE_MARGIN_PX) continue
+            // 박스 아래가 화면 밖으로 잘렸으면 진짜 바닥 접점을 모름 → 접점 경로만 건너뜀 (윗면 경로는 박스 가운데만 씀)
+            val bottomCut = box.bottom > viewportHeight - EDGE_MARGIN_PX
 
             // #67: 바닥에서 FURNITURE_MAX_M 넘는 수평면(선반·카운터·폰 바로 앞 면)은 가구 접점이 아님 (scan10.log: 1.3m 높이 면)
-            fun horizontalHits(x: Float, y: Float) = rayHits(frame, cam, x, y).filter { h ->
+            fun horizontalHits(x: Float, y: Float) = rayHits(frame, camPose, cam.intrinsics, x, y).filter { h ->
                 val p = h.trackable
                 p is Plane && p.type == Plane.Type.HORIZONTAL_UPWARD_FACING && p.isPoseInPolygon(h.hitPose) &&
                     (floorY == null || h.hitPose.ty() - floorY < FURNITURE_MAX_M)
@@ -444,10 +460,14 @@ class ArRenderer(
                     Log.d(TAG, "테이블 윗면 center=(%.2f, %.2f) 높이 %.2fm 크기 %.2f×%.2f".format(
                         c.tx(), c.tz(), c.ty() - floorY, top.extentX, top.extentZ))
                     val center = Pose.makeTranslation(c.tx(), floorY, c.tz())
-                    if (CornerOutline.near(outline, center.tx() to center.tz())) addOrMerge(session, d.label, center, center)
-                    continue
+                    // 윗면 중심이 외곽선 밖이면(평면이 벽 너머까지 잡힘) 아래 접점 경로로 다시 시도
+                    if (CornerOutline.near(outline, center.tx() to center.tz())) {
+                        addOrMerge(session, d.label, center, center)
+                        continue
+                    }
                 }
             }
+            if (bottomCut) continue
 
             val hits = horizontalHits((box.left + box.right) / 2f, box.bottom)
             // #67: 가장 가까운 수평면 = 화면에 실제로 보이는 면 (hitTest는 카메라에서 가까운 순).
@@ -461,7 +481,7 @@ class ArRenderer(
             }
             // #67 진단: 테이블 위치가 1m 넘게 어긋나는 원인 확인용 (카메라 위치, 박스, 맞은 수평면 후보 전부)
             if (d.label == "테이블") {
-                val c = cam.pose
+                val c = camPose
                 Log.d(TAG, "테이블 진단 cam=(%.2f, %.2f, %.2f) box=(%.0f, %.0f, %.0f, %.0f)/%dx%d hits=%s".format(
                     c.tx(), c.ty(), c.tz(), box.left, box.top, box.right, box.bottom, viewportWidth, viewportHeight,
                     hits.joinToString { "(%.2f, %.2f, y=%.2f)".format(it.hitPose.tx(), it.hitPose.tz(), it.hitPose.ty()) },
@@ -471,7 +491,7 @@ class ArRenderer(
             // 안 밀면 반대편에서 본 관측과 0.7m 넘게 벌어져 테이블 하나가 둘로 갈라짐 (scan9.log)
             val onTop = floorY != null && hit.hitPose.ty() - floorY > FLOOR_TOLERANCE_M
             val halfDepth = if (d.label == "테이블" && onTop) TABLE_SIZE_M / 2 else HALF_DEPTH_M.getValue(d.label)
-            val center = estimateCenter(cam.pose, hit.hitPose, halfDepth)
+            val center = estimateCenter(camPose, hit.hitPose, halfDepth)
             if (!CornerOutline.near(outline, center.tx() to center.tz())) continue
             addOrMerge(session, d.label, center, hit.hitPose)
         }
@@ -551,13 +571,13 @@ class ArRenderer(
      * frame.hitTest(x, y)는 지금 카메라 기준이라, 추론하는 동안 폰이 움직인 만큼 엉뚱한 바닥에 맞음.
      * 화면 ↔ 이미지 변환은 화면 회전·잘림만 반영하므로 지금 frame으로 해도 됨
      */
-    private fun rayHits(frame: Frame, cam: CaptureCamera, viewX: Float, viewY: Float): List<HitResult> {
+    private fun rayHits(frame: Frame, camPose: Pose, intrinsics: FloatArray, viewX: Float, viewY: Float): List<HitResult> {
         pointIn[0] = viewX; pointIn[1] = viewY
         frame.transformCoordinates2d(Coordinates2d.VIEW, pointIn, Coordinates2d.IMAGE_PIXELS, pointOut)
-        val dir = cam.pose.rotateVector(cameraRay(pointOut[0], pointOut[1], cam.intrinsics))
+        val dir = camPose.rotateVector(cameraRay(pointOut[0], pointOut[1], intrinsics))
         val len = sqrt(dir[0] * dir[0] + dir[1] * dir[1] + dir[2] * dir[2])
         for (i in 0..2) dir[i] /= len   // 단위 벡터로 (API가 정규화를 요구하는지 문서에 없어 안전하게)
-        return frame.hitTest(cam.pose.translation, 0, dir, 0)
+        return frame.hitTest(camPose.translation, 0, dir, 0)
     }
 
     /** 카메라 이미지 좌표의 박스 → 화면 좌표 (ARCore가 회전·잘림을 모두 계산해 줌) */
