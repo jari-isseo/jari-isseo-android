@@ -54,6 +54,7 @@ import com.jariisseo.android.ui.theme.Danger
 import com.jariisseo.android.ui.theme.Line
 import com.jariisseo.android.ui.theme.Sage
 import com.jariisseo.android.ui.theme.SageInk
+import kotlin.math.hypot
 
 private val FloorFill = Color(0xFFEEF2E8)
 private val FloorEdge = Color(0xFFB9C7AA)
@@ -62,6 +63,9 @@ private const val MIN_ZOOM = 0.5f   // 처음 맞춘 크기 대비
 private const val MAX_ZOOM = 4f
 private const val FOCUS_ZOOM = 2f   // #14: 편집 시트를 열 때 확대 (처음 맞춘 크기 대비)
 const val FOCUS_ANIM_MS = 300
+private val ENTRANCE_GAP = 6.dp         // #65: 배치 아래 끝 ~ ▲ 끝
+private val ENTRANCE_ARROW = 5.dp       // ▲ 높이 (= 밑변 절반)
+private val ENTRANCE_LABEL_GAP = 1.dp   // ▲ ~ "입구"
 
 /**
  * #13: 매장 좌표(m, x 오른쪽 · z 아래) ↔ 화면 픽셀. 순수 클래스라 단위 테스트 가능
@@ -102,12 +106,23 @@ fun Layout.points(): List<Pair<Float, Float>> =
     floor + walls.flatMap { listOf(it.first, it.second) } + tables.map { it.x to it.z } + chairs.map { it.x to it.z }
 
 /**
+ * #65: 그려진 배치의 가장 아래 z (입구 표시 위치). 테이블은 회전과 상관없이 대각선 절반, 의자는 반지름만큼 더함.
+ * 배치에 점이 없으면 -∞ (그리기 전에 points()로 확인)
+ */
+fun Layout.bottomEdge(): Float = maxOf(
+    (floor + walls.flatMap { listOf(it.first, it.second) }).maxOfOrNull { it.second } ?: Float.NEGATIVE_INFINITY,
+    tables.maxOfOrNull { it.z + hypot(it.width, it.depth) / 2 } ?: Float.NEGATIVE_INFINITY,
+    chairs.maxOfOrNull { it.z + CHAIR_RADIUS_M } ?: Float.NEGATIVE_INFINITY,
+)
+
+/**
  * #13: 탑뷰 배치도 (시안 D). 테이블을 끌면 이동, 빈 곳을 끌면 화면 이동, 두 손가락으로 확대·축소.
  * #14: 의자도 끌어서 이동, 테이블 탭 = onTableTap(편집 시트), 테이블·의자 길게 누름 = onDelete.
  * 끌기를 시작할 때 onEditStart 한 번 (되돌리기 단위). fitKey가 바뀌면 배치 전체가 보이게 다시 맞춤.
  * focusId: 편집 시트가 아래를 가리는 동안 그 테이블을 위쪽(높이 1/4)으로 옮기며 확대하고 선택 표시 (애니메이션)
  * #26: floorEditable이면 테이블·의자 대신 바닥 꼭짓점을 끌어서 이동, 변 가운데(+) 탭 = onFloorPointAdd,
  *   꼭짓점 길게 누름 = onFloorPointDelete. 꼬인 바닥은 빨간 테두리, 바닥 밖 테이블은 빨간 링 (두 모드 모두)
+ * #65: 배치 아래쪽에 입구 표시 (그리기만, 터치는 아래 배치·화면 이동이 그대로 받음)
  */
 @Composable
 fun TopView(
@@ -138,7 +153,11 @@ fun TopView(
     val pointAdd by rememberUpdatedState(onFloorPointAdd)
     val pointDelete by rememberUpdatedState(onFloorPointDelete)
     val textMeasurer = rememberTextMeasurer()
-    val padding = with(LocalDensity.current) { 28.dp.toPx() }
+    // #65: 입구 표시(▲ + "입구")가 아래 여백에 들어가게, 글자 크기 설정을 따라 잰 높이로 여백을 정함 (최소 28dp)
+    val entranceLabel = textMeasurer.measure("입구", TextStyle(color = WallColor, fontSize = 12.sp, fontWeight = FontWeight.Bold))
+    val padding = with(LocalDensity.current) {
+        maxOf(28.dp.toPx(), (ENTRANCE_GAP + ENTRANCE_ARROW + ENTRANCE_LABEL_GAP + 4.dp).toPx() + entranceLabel.size.height)
+    }
 
     // focusId가 생기면 0 → 1, 없어지면 1 → 0 (편집 시트·제목 숨김과 같은 길이). 닫힐 때도 그 테이블 기준으로 돌아가게 기억
     val focusProgress by animateFloatAsState(if (focusId != null) 1f else 0f, tween(FOCUS_ANIM_MS), label = "focus")
@@ -316,6 +335,22 @@ fun TopView(
                 TextStyle(color = if (isSelected) SageInk else Color.White, fontSize = 13.sp, fontWeight = FontWeight.Black),
             )
             drawText(label, topLeft = Offset(c.x - label.size.width / 2f, c.y - label.size.height / 2f))
+        }
+
+        // #65: 입구 = 배치 아래쪽 (회전 모드의 "입구가 화면 아래쪽" 약속). 배치 바로 아래 가운데에 ▲ + "입구"
+        val pts = layout.points()
+        if (pts.isNotEmpty()) {
+            val bottom = t.toScreen((pts.minOf { it.first } + pts.maxOf { it.first }) / 2, layout.bottomEdge())
+            val tipY = bottom.y + ENTRANCE_GAP.toPx()
+            val half = ENTRANCE_ARROW.toPx()
+            val arrow = Path().apply {
+                moveTo(bottom.x, tipY)
+                lineTo(bottom.x - half, tipY + half)
+                lineTo(bottom.x + half, tipY + half)
+                close()
+            }
+            drawPath(arrow, WallColor)
+            drawText(entranceLabel, topLeft = Offset(bottom.x - entranceLabel.size.width / 2f, tipY + half + ENTRANCE_LABEL_GAP.toPx()))
         }
 
         // #26: 바닥 모양 모드 = 변 가운데 +(추가), 꼭짓점 흰 점(끌기·길게 눌러 삭제)

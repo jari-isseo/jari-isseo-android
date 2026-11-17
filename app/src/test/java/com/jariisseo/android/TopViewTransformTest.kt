@@ -1,6 +1,7 @@
 package com.jariisseo.android
 
 import com.jariisseo.android.ui.TopViewTransform
+import com.jariisseo.android.ui.bottomEdge
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -50,5 +51,16 @@ class TopViewTransformTest {
         assertEquals(before.first, after.first, eps)
         assertEquals(before.second, after.second, eps)
         assertEquals(400f, t.zoomed(10f, 0f, 0f, 50f, 400f).scale, eps)
+    }
+
+    @Test
+    fun bottomEdge_includesTableAndChairSize() {
+        val floor = listOf(0f to 0f, 4f to 0f, 4f to 3f, 0f to 3f)
+        // #65: 아래 벽(z=3)에 걸친 테이블은 대각선 절반만큼, 의자는 반지름만큼 더 아래로
+        val table = TableItem("t-aaaa", "1번", 2f, 3f, width = 0.6f, depth = 0.8f)
+        assertEquals(3f, Layout("f-aaaa", floor, emptyList(), emptyList(), emptyList()).bottomEdge(), eps)
+        assertEquals(3.5f, Layout("f-aaaa", floor, emptyList(), listOf(table), emptyList()).bottomEdge(), eps)
+        val chair = ChairItem("c-aaaa", 1f, 3f)
+        assertEquals(3f + CHAIR_RADIUS_M, Layout("f-aaaa", floor, emptyList(), emptyList(), listOf(chair)).bottomEdge(), eps)
     }
 }
