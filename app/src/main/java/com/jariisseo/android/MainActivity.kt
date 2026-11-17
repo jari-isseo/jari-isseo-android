@@ -169,7 +169,7 @@ class MainActivity : ComponentActivity() {
                         // #13: [스캔 완료] = 지금 스캔 결과로 보정할 배치를 새로 만들고 보정 화면으로 (이전 보정 내용은 덮어씀)
                         //   새 floorId가 생김 → 저장 때 기존 층이면 "다시 스캔"으로 판단 (withFloor)
                         ScanScreen(editTarget?.name.orEmpty(), onClose) {
-                            editLayout = layoutOf(uiState)
+                            editLayout = layoutOf(uiState)   // 의자는 보정 화면에서 테이블별 좌석 수로
                             onDone()
                         }
                     },
@@ -375,7 +375,7 @@ class MainActivity : ComponentActivity() {
                             wallStep -> "화면을 벽에 대고 볼륨 버튼 · 3개부터 완료"
                             needsSlowLap(scanElapsedMs, state) -> "천천히 한 바퀴 더 돌며 테이블을 비춰 주세요"
                             !canFinish(state) -> "테이블을 1개 이상 찾으면 완료할 수 있어요"
-                            else -> "의자 ${confirmed.count { it.label == "의자" }} · 천천히 걸으며 비춰 주세요"
+                            else -> "천천히 걸으며 테이블을 비춰 주세요"
                         },
                         fontSize = 12.sp, color = dim,
                     )
@@ -414,7 +414,7 @@ class MainActivity : ComponentActivity() {
                 AlertDialog(
                     onDismissRequest = { confirmReset = false },
                     title = { Text("스캔을 처음부터 할까요?") },
-                    text = { Text("기록한 벽과 찾은 테이블·의자가 모두 지워져요.") },
+                    text = { Text("기록한 벽과 찾은 테이블이 모두 지워져요.") },
                     confirmButton = {
                         TextButton(onClick = {
                             renderer.clear()

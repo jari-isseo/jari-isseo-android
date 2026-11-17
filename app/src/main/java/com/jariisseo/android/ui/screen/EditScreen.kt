@@ -52,6 +52,7 @@ import com.jariisseo.android.TABLE_SIZE_MIN
 import com.jariisseo.android.TableItem
 import com.jariisseo.android.addFloorPoint
 import com.jariisseo.android.addTable
+import com.jariisseo.android.chairsOf
 import com.jariisseo.android.floorError
 import com.jariisseo.android.net.ApiException
 import com.jariisseo.android.net.FloorTarget
@@ -63,6 +64,7 @@ import com.jariisseo.android.removeChair
 import com.jariisseo.android.removeFloorPoint
 import com.jariisseo.android.removeTable
 import com.jariisseo.android.rotateLayout
+import com.jariisseo.android.setChairCount
 import com.jariisseo.android.tablesOutsideFloor
 import com.jariisseo.android.updateTable
 import com.jariisseo.android.ui.CircleButton
@@ -387,7 +389,9 @@ fun EditScreen(
     if (layout != null && editing != null) {
         TableSheet(
             table = editing,
+            chairs = chairsOf(layout, editing).size,
             onChange = { onChange(updateTable(layout, it)) },
+            onChairs = { onChange(setChairCount(layout, editing.id, it)) },
             onDelete = { onChange(removeTable(layout, editing.id)); editingId = null },
             onDismiss = {
                 if (history.lastOrNull() == layout) history = history.dropLast(1)
@@ -399,7 +403,14 @@ fun EditScreen(
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun TableSheet(table: TableItem, onChange: (TableItem) -> Unit, onDelete: () -> Unit, onDismiss: () -> Unit) {
+private fun TableSheet(
+    table: TableItem,
+    chairs: Int,
+    onChange: (TableItem) -> Unit,
+    onChairs: (Int) -> Unit,
+    onDelete: () -> Unit,
+    onDismiss: () -> Unit,
+) {
     // 배경을 어둡게 하지 않음: 위로 올린 배치도에서 고치는 테이블이 그대로 보이게
     ModalBottomSheet(onDismissRequest = onDismiss, containerColor = Bg, scrimColor = Color.Transparent) {
         // 미리보기가 들어가 작은 화면에서는 아래(회전·삭제)가 잘리므로 스크롤
@@ -435,6 +446,12 @@ private fun TableSheet(table: TableItem, onChange: (TableItem) -> Unit, onDelete
                 Box(Modifier.size(8.dp))
                 PillTab("90°", false) { onChange(table.copy(rotation = normalizeDegrees(table.rotation.roundToInt() + 90f))) }
             }
+            // 의자는 자동 인식하지 않음 → 좌석 수만큼 테이블 둘레에 놓음 (놓은 뒤 끌어서 조정 가능)
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("의자 ${chairs}개", Modifier.weight(1f), fontSize = 14.sp, color = Sub)
+                PillTab("−", false) { if (chairs > 0) onChairs(chairs - 1) }
+                PillTab("+", false) { if (chairs < MAX_CHAIRS) onChairs(chairs + 1) }
+            }
             Box(
                 Modifier.fillMaxWidth().height(48.dp).clip(CircleShape).border(1.5.dp, Danger, CircleShape).clickable(onClick = onDelete),
                 contentAlignment = Alignment.Center,
@@ -442,6 +459,8 @@ private fun TableSheet(table: TableItem, onChange: (TableItem) -> Unit, onDelete
         }
     }
 }
+
+private const val MAX_CHAIRS = 12
 
 @Composable
 private fun SheetSlider(label: String, value: Float, range: ClosedFloatingPointRange<Float>, steps: Int, onValueChange: (Float) -> Unit) {

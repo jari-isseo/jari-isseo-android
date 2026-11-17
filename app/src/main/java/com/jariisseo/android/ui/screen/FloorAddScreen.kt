@@ -108,7 +108,7 @@ fun FloorAddScreen(onBack: () -> Unit, onStart: (name: String) -> Unit) {
             ) {
                 Text("스캔은 이렇게 해요", fontSize = 17.sp, fontWeight = FontWeight.ExtraBold)
                 Step(1, "벽", "벽마다 화면을 대고 볼륨 버튼을 눌러요")
-                Step(2, "가구", "천천히 걸으며 테이블·의자를 비춰요")
+                Step(2, "가구", "천천히 걸으며 테이블을 비춰요")
                 Text("계단에서는 위치가 끊겨요. 한 층씩 따로 스캔해 주세요.", fontSize = 13.sp, color = Sub, lineHeight = 20.sp)
             }
 

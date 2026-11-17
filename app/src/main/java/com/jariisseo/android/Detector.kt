@@ -22,6 +22,17 @@ data class Detection(
 )
 
 /**
+ * CPU 카메라 이미지 픽셀 (u, v) → 카메라 기준 광선 방향.
+ * 축은 ARCore Camera.getPose와 같음: +X 오른쪽, +Y 위, -Z 앞 (이미지를 읽는 방향 기준).
+ * intrinsics = [fx, fy, cx, cy] (Camera.getImageIntrinsics)
+ */
+fun cameraRay(u: Float, v: Float, intrinsics: FloatArray): FloatArray = floatArrayOf(
+    (u - intrinsics[2]) / intrinsics[0],
+    -(v - intrinsics[3]) / intrinsics[1],   // 이미지 v는 아래로 커짐 → 위(+Y)는 반대
+    -1f,
+)
+
+/**
  * ARCore 카메라 이미지(YUV_420_888)를 복사해 둔 것.
  * Image는 빨리 close()해야 해서, 바이트만 복사해 두고 백그라운드 스레드에서 처리.
  */
@@ -193,7 +204,7 @@ class Detector(context: Context) {
         const val SCORE_THRESHOLD = 0.4f
         const val IOU_THRESHOLD = 0.5f
         const val PAD = 114f / 255f                // YOLO 학습 때 쓰는 회색 여백
-        // COCO 클래스 번호 → 우리가 관심 있는 것만
-        val TARGETS = mapOf(56 to "의자", 57 to "소파", 60 to "테이블")
+        // COCO 클래스 번호 → 우리가 관심 있는 것만. 의자는 인식이 부정확해 보정 화면에서 테이블별 좌석 수로 배치
+        val TARGETS = mapOf(57 to "소파", 60 to "테이블")
     }
 }

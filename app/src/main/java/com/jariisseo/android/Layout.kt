@@ -3,6 +3,7 @@ package com.jariisseo.android
 import kotlin.math.abs
 import kotlin.math.cos
 import kotlin.math.hypot
+import kotlin.math.max
 import kotlin.math.sin
 import kotlin.random.Random
 
@@ -74,9 +75,17 @@ fun hitTable(layout: Layout, x: Float, z: Float, slop: Float = 0f): TableItem? =
         abs(lx) <= t.width / 2 + slop && abs(lz) <= t.depth / 2 + slop
     }
 
-/** 테이블 하나의 위치만 바꾼 새 배치 */
-fun moveTable(layout: Layout, id: String, x: Float, z: Float): Layout =
-    layout.copy(tables = layout.tables.map { if (it.id == id) it.copy(x = x, z = z) else it })
+/** 테이블 위치를 바꾼 새 배치. 그 테이블에 붙은 의자도 같이 옮김 */
+fun moveTable(layout: Layout, id: String, x: Float, z: Float): Layout {
+    val t = layout.tables.firstOrNull { it.id == id } ?: return layout
+    val own = chairsOf(layout, t).map { it.id }.toSet()
+    val dx = x - t.x
+    val dz = z - t.z
+    return layout.copy(
+        tables = layout.tables.map { if (it.id == id) it.copy(x = x, z = z) else it },
+        chairs = layout.chairs.map { if (it.id in own) it.copy(x = it.x + dx, z = it.z + dz) else it },
+    )
+}
 
 /** (x, z)에 있는 의자 (중심에서 radius + slop(m) 안) */
 fun hitChair(layout: Layout, x: Float, z: Float, slop: Float = 0f, radius: Float = CHAIR_RADIUS_M): ChairItem? =
@@ -87,6 +96,61 @@ fun hitChair(layout: Layout, x: Float, z: Float, slop: Float = 0f, radius: Float
     }
 
 const val CHAIR_RADIUS_M = 0.2f
+/**
+ * 테이블에 붙은 의자: 테이블 변에서 의자 지름 안쪽에 있고, 중심이 가장 가까운 테이블이 이 테이블인 것.
+ * (스키마에 의자-테이블 연결이 없어 위치로 판단)
+ */
+fun chairsOf(layout: Layout, t: TableItem): List<ChairItem> = layout.chairs.filter { c ->
+    val (lx, lz) = toTableLocal(t, c.x, c.z)
+    abs(lx) <= t.width / 2 + 2 * CHAIR_RADIUS_M && abs(lz) <= t.depth / 2 + 2 * CHAIR_RADIUS_M &&
+        layout.tables.minByOrNull { hypot(it.x - c.x, it.z - c.z) }?.id == t.id
+}
+
+/**
+ * 테이블 둘레에 의자 n개를 놓을 위치 (변 바깥, 의자 반지름만큼 띄움).
+ * 원형: 앞(+z)부터 같은 간격. 사각: 긴 두 변에 나눠서 (홀수면 앞쪽 변에 1개 더), 변 위에서 같은 간격
+ */
+fun chairSpots(t: TableItem, n: Int): List<Pair<Float, Float>> {
+    if (n <= 0) return emptyList()
+    val local = if (t.shape == "ROUND") {
+        val r = max(t.width, t.depth) / 2 + CHAIR_RADIUS_M
+        (0 until n).map { i ->
+            val a = 2 * Math.PI * i / n
+            (r * sin(a)).toFloat() to (r * cos(a)).toFloat()
+        }
+    } else {
+        val wide = t.width >= t.depth
+        val len = if (wide) t.width else t.depth
+        val off = (if (wide) t.depth else t.width) / 2 + CHAIR_RADIUS_M
+        fun side(k: Int, sign: Int) = (0 until k).map { i -> (-len / 2 + len * (i + 0.5f) / k) to sign * off }
+        (side((n + 1) / 2, 1) + side(n / 2, -1)).map { (along, across) -> if (wide) along to across else across to along }
+    }
+    return local.map { (lx, lz) -> fromTableLocal(t, lx, lz) }
+}
+
+/** 테이블의 의자 수를 n개로: 붙은 의자를 지우고 둘레에 다시 놓음 (있던 의자 id는 앞에서부터 재사용) */
+fun setChairCount(layout: Layout, tableId: String, n: Int, random: Random = Random.Default): Layout {
+    val t = layout.tables.firstOrNull { it.id == tableId } ?: return layout
+    val own = chairsOf(layout, t)
+    val used = (layout.tables.map { it.id } + layout.chairs.map { it.id } + layout.floorId).toMutableSet()
+    val placed = chairSpots(t, n).mapIndexed { i, (x, z) ->
+        ChairItem(own.getOrNull(i)?.id ?: newId("c-", used, random).also { used.add(it) }, x, z)
+    }
+    return layout.copy(chairs = layout.chairs - own.toSet() + placed)
+}
+
+/** 매장 좌표 → 테이블 기준 좌표 (hitTable과 같은 회전) */
+private fun toTableLocal(t: TableItem, x: Float, z: Float): Pair<Float, Float> {
+    val r = Math.toRadians(-t.rotation.toDouble())
+    val dx = x - t.x
+    val dz = z - t.z
+    return (dx * cos(r) - dz * sin(r)).toFloat() to (dx * sin(r) + dz * cos(r)).toFloat()
+}
+
+private fun fromTableLocal(t: TableItem, lx: Float, lz: Float): Pair<Float, Float> {
+    val r = Math.toRadians(t.rotation.toDouble())
+    return t.x + (lx * cos(r) - lz * sin(r)).toFloat() to t.z + (lx * sin(r) + lz * cos(r)).toFloat()
+}
 
 /** #14: 새 테이블 (ID는 층·테이블·의자 전체에서 유일, 이름은 가장 큰 "N번" + 1) */
 fun addTable(layout: Layout, x: Float, z: Float, random: Random = Random.Default): Layout {
@@ -95,16 +159,29 @@ fun addTable(layout: Layout, x: Float, z: Float, random: Random = Random.Default
     return layout.copy(tables = layout.tables + TableItem(newId("t-", used.toSet(), random), "${next}번", x, z))
 }
 
-fun removeTable(layout: Layout, id: String): Layout = layout.copy(tables = layout.tables.filterNot { it.id == id })
+/** 테이블과 거기 붙은 의자를 함께 지움 */
+fun removeTable(layout: Layout, id: String): Layout {
+    val own = layout.tables.firstOrNull { it.id == id }?.let { chairsOf(layout, it) }.orEmpty().toSet()
+    return layout.copy(tables = layout.tables.filterNot { it.id == id }, chairs = layout.chairs - own)
+}
 
-/** #14: 편집 시트 결과 반영. 크기는 서버 규칙(0.3~3m)으로 제한 */
+/** #14: 편집 시트 결과 반영. 크기는 서버 규칙(0.3~3m)으로 제한. 크기·회전·모양이 바뀌면 붙은 의자를 다시 놓음 */
 fun updateTable(layout: Layout, table: TableItem): Layout {
     val fixed = table.copy(
         width = table.width.coerceIn(TABLE_SIZE_MIN, TABLE_SIZE_MAX),
         depth = table.depth.coerceIn(TABLE_SIZE_MIN, TABLE_SIZE_MAX),
         rotation = normalizeDegrees(table.rotation),
     )
-    return layout.copy(tables = layout.tables.map { if (it.id == table.id) fixed else it })
+    val old = layout.tables.firstOrNull { it.id == table.id }
+    val own = if (old == null || old.copy(name = fixed.name) == fixed) emptyList() else chairsOf(layout, old)
+    val spots = chairSpots(fixed, own.size)
+    return layout.copy(
+        tables = layout.tables.map { if (it.id == table.id) fixed else it },
+        chairs = layout.chairs.map { c ->
+            val i = own.indexOf(c)
+            if (i < 0) c else c.copy(x = spots[i].first, z = spots[i].second)
+        },
+    )
 }
 
 fun moveChair(layout: Layout, id: String, x: Float, z: Float): Layout =
