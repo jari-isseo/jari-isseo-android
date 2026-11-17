@@ -120,13 +120,30 @@ object CornerOutline {
         return edges(outline).any { (a, b) -> segmentDist(a, b, p) <= margin }
     }
 
+    /**
+     * #67: 외곽선 밖의 점 → 가장 가까운 변 위의 점에서 안쪽으로 inset만큼 더 들어간 점. 안의 점은 그대로.
+     * (벽에 붙은 가구가 벽 너머로 추정된 경우, 중심이 벽에서 반 크기만큼 떨어지게)
+     */
+    fun pullInside(outline: List<Pair<Float, Float>>, p: Pair<Float, Float>, inset: Float): Pair<Float, Float> {
+        if (outline.size < 3 || FloorPolygon.contains(outline, p.first, p.second)) return p
+        val q = edges(outline).map { (a, b) -> closest(a, b, p) }.minBy { dist(p, it) }
+        val d = dist(p, q)
+        if (d == 0f) return q
+        // p → q 방향 = 벽을 넘어 안쪽으로 들어가는 방향
+        return q.first + (q.first - p.first) / d * inset to q.second + (q.second - p.second) / d * inset
+    }
+
     /** 점 p와 선분 ab 사이 거리 */
-    private fun segmentDist(a: Pair<Float, Float>, b: Pair<Float, Float>, p: Pair<Float, Float>): Float {
+    private fun segmentDist(a: Pair<Float, Float>, b: Pair<Float, Float>, p: Pair<Float, Float>): Float =
+        dist(p, closest(a, b, p))
+
+    /** 선분 ab 위에서 점 p와 가장 가까운 점 */
+    private fun closest(a: Pair<Float, Float>, b: Pair<Float, Float>, p: Pair<Float, Float>): Pair<Float, Float> {
         val dx = b.first - a.first
         val dz = b.second - a.second
         val len2 = dx * dx + dz * dz
         val t = if (len2 == 0f) 0f else (((p.first - a.first) * dx + (p.second - a.second) * dz) / len2).coerceIn(0f, 1f)
-        return dist(p, a.first + dx * t to a.second + dz * t)
+        return a.first + dx * t to a.second + dz * t
     }
 
     /** 벽 방향 단위벡터 = 법선에 수직 */

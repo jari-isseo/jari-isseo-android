@@ -115,6 +115,23 @@ class CornerOutlineTest {
     }
 
     @Test
+    fun pullInside_outsidePointMovesInsetFromWall() {
+        val room = listOf(0f to 0f, 4f to 0f, 4f to 3f, 0f to 3f)
+
+        // 안쪽은 그대로
+        assertEquals(2f to 1.5f, CornerOutline.pullInside(room, 2f to 1.5f, 0.4f))
+        // #67: 벽(x=4) 밖 0.2m 테이블 → 벽 안쪽 0.4m
+        val p = CornerOutline.pullInside(room, 4.2f to 1.5f, 0.4f)
+        assertEquals(3.6f, p.first, 1e-4f)
+        assertEquals(1.5f, p.second, 1e-4f)
+        // 모서리 밖 → 모서리에서 대각선 안쪽으로, 외곽선 안
+        val c = CornerOutline.pullInside(room, -0.2f to -0.2f, 0.2f)
+        assertTrue("$c", FloorPolygon.contains(room, c.first, c.second))
+        // 외곽선이 없으면 그대로
+        assertEquals(5f to 5f, CornerOutline.pullInside(emptyList(), 5f to 5f, 0.4f))
+    }
+
+    @Test
     fun segment_liesAlongWall() {
         val (a, b) = CornerOutline.segment(touch(2f, 0f, 0f, 1f))
 
