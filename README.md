@@ -90,7 +90,7 @@ flowchart TB
 ### 요구 사항
 
 - Android Studio (JDK는 Studio 내장 JBR 사용)
-- **ARCore 지원 기기** ([지원 기기 목록](https://developers.google.com/ar/devices)) — 앱이 ARCore 지원 여부를 확인해, 미지원 기기에서는 스캔 없이 데모 모드만 사용할 수 있습니다.
+- **ARCore 지원 기기** ([지원 기기 목록](https://developers.google.com/ar/devices)) — 앱이 ARCore 지원 여부를 확인해, 미지원 기기에서는 스캔만 막힙니다. 로그인·탑뷰 보정·테이블 상태 관리는 그대로 사용할 수 있고, 데모 로그인으로 샘플 배치를 체험할 수 있습니다.
 - **백엔드 서버**: debug 빌드는 `devServerUrl`의 서버에 로그인·배치 요청을 보내므로, 그 주소에서 [jari-isseo-server](https://github.com/jari-isseo/jari-isseo-server)가 실행 중이어야 합니다. (실행 방법은 server 레포 README 참고)
 
 ### 1. 서버 주소 설정
