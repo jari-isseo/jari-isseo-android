@@ -52,24 +52,22 @@
 ## 시스템 아키텍처
 
 ```mermaid
-flowchart LR
-    subgraph App[사장님 앱 · Android]
-        Scan[ARCore + YOLOv8 스캔] --> Edit[탑뷰 보정]
-        Owner[WebView owner 모드]
+flowchart TB
+    subgraph App["사장님 앱 (Android)"]
+        Scan["스캔<br/>ARCore + YOLOv8"] --> Edit["탑뷰 보정"]
+        Owner["사장님 뷰<br/>WebView"]
     end
-    subgraph Server[jari-isseo-server]
-        API[Spring Boot REST API]
-        DB[(MySQL)]
-        Viewer[웹 렌더러 /s/publicId]
-        API --> DB
+    subgraph Server["jari-isseo-server"]
+        API["REST API<br/>Spring Boot"] --> DB[("MySQL")]
+        Viewer["웹 렌더러<br/>/s/{publicId}"]
     end
-    Guest[손님 웹 · 모바일 브라우저]
+    Guest["손님 웹<br/>모바일 브라우저"]
 
-    Edit -- 배치 업로드 --> API
-    Owner -- 테이블 상태 변경 REST --> API
+    Edit -->|"배치 업로드"| API
+    Owner -->|"상태 변경"| API
     Viewer --> Owner
     Viewer --> Guest
-    API -- SSE 실시간 알림 --> Guest
+    API -->|"SSE 알림"| Guest
 ```
 
 - 사장님 앱(WebView)과 손님 웹이 같은 SVG 렌더러로 그리기 때문에, 사장님이 보는 지도와 손님이 보는 지도가 항상 같습니다.
@@ -148,7 +146,7 @@ com.jariisseo.android/
 
 ## 팀원
 
-| 이름 | 역할 | GitHub |
-| --- | --- | --- |
-| 민구 | Android | [@LEEMINGU03](https://github.com/LEEMINGU03) |
-| 세훈 | Backend | [@sayhoney1023](https://github.com/sayhoney1023) |
+| 이름  | 역할 | GitHub |
+|-----| --- | --- |
+| 이민구 | Android | [@LEEMINGU03](https://github.com/LEEMINGU03) |
+| 정세헌 | Backend | [@sayhoney1023](https://github.com/sayhoney1023) |
