@@ -42,8 +42,11 @@ import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.jariisseo.android.net.ApiException
@@ -154,7 +157,15 @@ fun HomeScreen(
         Column(Modifier.fillMaxSize()) {
             Row(Modifier.padding(start = 24.dp, end = 24.dp, top = 40.dp), verticalAlignment = Alignment.Top) {
                 Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text("자리있어", fontSize = 14.sp, color = Sub, fontWeight = FontWeight.Medium)
+                    // 앱 아이콘과 같게: ? 파랑, ! 빨강
+                    Text(
+                        buildAnnotatedString {
+                            append("자리있어")
+                            withStyle(SpanStyle(color = Color(0xFF3B5BA5))) { append("?") }
+                            withStyle(SpanStyle(color = Color(0xFFC8613F))) { append("!") }
+                        },
+                        fontSize = 14.sp, color = Sub, fontWeight = FontWeight.Medium,
+                    )
                     Text(
                         storeName ?: "내 매장", fontSize = 32.sp, fontWeight = FontWeight.Black,
                         lineHeight = 40.sp, maxLines = 2, overflow = TextOverflow.Ellipsis,
