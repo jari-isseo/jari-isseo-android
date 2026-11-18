@@ -19,6 +19,10 @@ val releaseServerUrl = "https://jariisseo.mingu.cloud/"
 // #17: debug에서 local.properties에 viewerSample=true면 사장님 뷰가 실제 매장(/s/{publicId}) 대신 샘플 뷰어를 엶
 //   (손님 웹 페이지는 server#16 전이라 없음). release는 항상 실제 매장
 val viewerSample: Boolean = localProps.getProperty("viewerSample")?.trim()?.toBoolean() ?: false   // properties는 값 뒤 공백을 남김
+// #24: 제출용 서명. 키스토어·비밀번호는 레포에 올리지 않고 각자 local.properties에 둠
+//   releaseStoreFile, releaseStorePassword, releaseKeyAlias, releaseKeyPassword
+//   없으면 release는 서명 없이 빌드됨 (설치 불가 APK)
+val releaseStoreFile: String? = localProps.getProperty("releaseStoreFile")?.trim()
 
 android {
     namespace = "com.jariisseo.android"
@@ -34,6 +38,17 @@ android {
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
+    signingConfigs {
+        if (releaseStoreFile != null) {
+            create("release") {
+                storeFile = file(releaseStoreFile)
+                storePassword = localProps.getProperty("releaseStorePassword")?.trim()
+                keyAlias = localProps.getProperty("releaseKeyAlias")?.trim()
+                keyPassword = localProps.getProperty("releaseKeyPassword")?.trim()
+            }
+        }
+    }
+
     buildTypes {
         debug {
             buildConfigField("String", "BASE_URL", "\"$devServerUrl\"")
@@ -42,6 +57,7 @@ android {
         release {
             buildConfigField("String", "BASE_URL", "\"$releaseServerUrl\"")
             buildConfigField("boolean", "VIEWER_SAMPLE", "false")
+            signingConfigs.findByName("release")?.let { signingConfig = it }
             isMinifyEnabled = false
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
