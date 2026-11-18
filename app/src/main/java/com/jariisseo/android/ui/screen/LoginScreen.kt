@@ -1,8 +1,8 @@
 package com.jariisseo.android.ui.screen
 
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
@@ -33,6 +33,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
@@ -48,15 +49,12 @@ import com.jariisseo.android.net.ApiException
 import com.jariisseo.android.net.Demo
 import com.jariisseo.android.net.Server
 import com.jariisseo.android.net.displayMessage
-import com.jariisseo.android.ui.Glyph
-import com.jariisseo.android.ui.LineIcon
+import com.jariisseo.android.R
 import com.jariisseo.android.ui.PrimaryButton
 import com.jariisseo.android.ui.theme.Bg
 import com.jariisseo.android.ui.theme.Brown
 import com.jariisseo.android.ui.theme.Danger
 import com.jariisseo.android.ui.theme.Ink
-import com.jariisseo.android.ui.theme.Sage
-import com.jariisseo.android.ui.theme.SageInk
 import com.jariisseo.android.ui.theme.Sub
 import kotlinx.coroutines.launch
 
@@ -118,9 +116,12 @@ fun LoginScreen(onLoggedIn: () -> Unit, onSignup: () -> Unit) {
                 .padding(horizontal = 24.dp),
         ) {
             Spacer(Modifier.height(88.dp))
-            Box(Modifier.size(56.dp).clip(RoundedCornerShape(18.dp)).background(Sage), contentAlignment = Alignment.Center) {
-                LineIcon(Glyph.TABLE, SageInk, size = 30.dp)
-            }
+            // mipmap/ic_launcher는 API 26+에서 adaptive-icon XML이라 painterResource가 못 읽음 → 전경 PNG 사용
+            Image(
+                painterResource(R.mipmap.ic_launcher_foreground),
+                contentDescription = "자리있어",
+                modifier = Modifier.size(72.dp).clip(RoundedCornerShape(22.dp)).background(Color.White),
+            )
             Spacer(Modifier.height(24.dp))
             Text("사장님,\n반가워요", fontSize = 34.sp, fontWeight = FontWeight.Black, lineHeight = 42.sp)
             Spacer(Modifier.height(10.dp))
