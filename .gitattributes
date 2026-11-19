@@ -1,0 +1,5 @@
+# 실행 스크립트 줄바꿈 고정 (Git 설정과 무관하게)
+gradlew text eol=lf
+*.bat text eol=crlf
+*.jar binary
+*.tflite binary

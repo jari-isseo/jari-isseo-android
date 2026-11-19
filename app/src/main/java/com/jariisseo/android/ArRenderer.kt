@@ -1,0 +1,895 @@
+package com.jariisseo.android
+
+import android.opengl.GLES20
+import android.opengl.GLSurfaceView
+import android.opengl.Matrix
+import android.util.Log
+import android.view.Surface
+import com.google.ar.core.Anchor
+import com.google.ar.core.Camera
+import com.google.ar.core.Coordinates2d
+import com.google.ar.core.Frame
+import com.google.ar.core.HitResult
+import com.google.ar.core.Plane
+import com.google.ar.core.Pose
+import com.google.ar.core.Session
+import com.google.ar.core.TrackingFailureReason
+import com.google.ar.core.TrackingState
+import java.util.concurrent.ConcurrentLinkedQueue
+import java.util.concurrent.Executors
+import java.util.concurrent.atomic.AtomicBoolean
+import javax.microedition.khronos.egl.EGLConfig
+import javax.microedition.khronos.opengles.GL10
+import kotlin.math.atan2
+import kotlin.math.max
+import kotlin.math.min
+import kotlin.math.sqrt
+
+/** 3D 점(Anchor)을 화면에 투영한 2D 위치. visible=false면 카메라 뒤이거나 추적을 잃은 점 */
+data class ScreenPoint(val x: Float, val y: Float, val visible: Boolean)
+
+/** 인식 박스를 화면 픽셀 좌표로 바꾼 것 */
+data class ScreenBox(
+    val label: String, val score: Float,
+    val left: Float, val top: Float, val right: Float, val bottom: Float,
+)
+
+/** GL 스레드 → UI 스레드로 넘기는 화면 상태 (Spring의 응답 DTO 같은 역할) */
+data class ArUiState(
+    val status: String = "확인 중...",
+    val trackingIssue: TrackingIssue = TrackingIssue.INITIALIZING,   // #9: 사장님용 추적 안내
+    val error: String? = null,                                       // #9: 스캔을 못 하는 오류 (안내 배너에 표시)
+    val floorPlanes: Int = 0,                     // #4: 바닥 높이의 평면만 (책상 윗면·의자 앉는 면 제외)
+    val points: List<ScreenPoint> = emptyList(),
+    val lastDistanceM: Float? = null,
+    val message: String = "바닥이나 벽을 비춘 뒤 화면을 탭하세요",
+    val boxes: List<ScreenBox> = emptyList(),     // 8교시: 인식 박스
+    // 9교시: 탑뷰 배치도 (#6: 매장 좌표, 미터, 0 이상. 가장 긴 벽이 x축과 평행)
+    val mapItems: List<MapItem> = emptyList(),
+    val cameraX: Float = 0f,
+    val cameraZ: Float = 0f,
+    val headingX: Float = 0f,                     // 카메라가 바라보는 방향 (바닥 평면에 투영)
+    val headingZ: Float = -1f,
+    val floorPolygon: List<Pair<Float, Float>> = emptyList(),   // #4: 바닥 외곽선 (매장 x, z)
+    val walls: List<WallLine> = emptyList(),                    // #5: 벽 선분 (매장 x, z)
+    val touchedWalls: List<WallLine> = emptyList(),             // #38: 기록한 벽 (짧은 선분, 매장 x, z). 완료되면 비움
+    val outlineClosed: Boolean = false,                         // #38: 외곽선 완료 → floorPolygon·walls가 외곽선
+)
+
+/** 배치도에 올라간 가구 1개. confirmed = 여러 번 확인돼서 진짜일 가능성이 높은 것 */
+data class MapItem(val label: String, val x: Float, val z: Float, val count: Int, val confirmed: Boolean)
+
+/** #38: 벽 대기 버튼 (UI 스레드 → GL 스레드) */
+enum class OutlineOp { RECORD, UNDO, RESET, CLOSE }
+
+/**
+ * GL 스레드에서 매 프레임 실행되는 조율자.
+ * onState: 화면 상태가 바뀌면 호출 (⚠️ GL 스레드에서 불림)
+ */
+class ArRenderer(
+    private val detector: Detector?,               // 8교시: 모델 로드 실패 시 null
+    private val onState: (ArUiState) -> Unit,
+    private val onWallRecord: (Boolean) -> Unit,   // #38: 벽 기록 결과 (성공/실패). ⚠️ GL 스레드에서 불림
+) : GLSurfaceView.Renderer {
+
+    @Volatile var session: Session? = null   // UI 스레드가 쓰고 GL 스레드가 읽음
+
+    private val background = BackgroundRenderer()
+    private var viewportWidth = 0
+    private var viewportHeight = 0
+    private var viewportChanged = false
+    private var textureBoundTo: Session? = null
+
+    // ── 7교시: 탭 → 앵커 ──
+    // UI 스레드가 넣고 GL 스레드가 꺼내는 큐 (스레드 안전)
+    private val pendingTaps = ConcurrentLinkedQueue<FloatArray>()
+    @Volatile private var clearRequested = false
+    private val anchors = mutableListOf<Anchor>()     // GL 스레드에서만 다룸
+    private var message = ArUiState().message
+    private var lastState: ArUiState? = null
+
+    // 3D → 2D 변환용 행렬 (매 프레임 새로 만들지 않도록 재사용)
+    private val viewMatrix = FloatArray(16)
+    private val projMatrix = FloatArray(16)
+    private val viewProjMatrix = FloatArray(16)
+    private val world = FloatArray(4)
+    private val clip = FloatArray(4)
+
+    // ── 8교시: 백그라운드 인식 ──
+    // 추론은 무거워서(수십~수백 ms) GL 스레드에서 하면 카메라 화면이 끊김 → 전용 스레드 1개
+    private val detectExecutor = Executors.newSingleThreadExecutor()
+    private val detecting = AtomicBoolean(false)          // 추론 중이면 새 프레임은 건너뜀
+    /** 추론에 넣은 이미지를 찍은 순간의 카메라. intrinsics = [fx, fy, cx, cy] (CPU 이미지 기준) */
+    /**
+     * 추론하는 동안 ARCore가 월드 좌표를 보정할 수 있어 숫자 pose를 다음 프레임에 그대로 쓰면 안 됨
+     * → 기준 앵커(mapAnchor)에 대한 상대 pose로 들고 있다가, 쓸 때 앵커의 지금 pose로 되돌림.
+     * 앵커가 없으면(스캔 직후 등) 월드 pose 그대로
+     */
+    private class CaptureCamera(private val anchor: Anchor?, private val pose: Pose, val intrinsics: FloatArray) {
+        /** 지금 월드 좌표 기준 촬영 순간 카메라 pose. 앵커를 놓쳤으면 null */
+        fun currentPose(): Pose? =
+            if (anchor == null) pose
+            else anchor.takeIf { it.trackingState == TrackingState.TRACKING }?.pose?.compose(pose)
+    }
+    /** 인식 결과 + 그 이미지를 찍은 카메라 (한 번에 바꿔야 GL 스레드가 섞인 값을 안 읽음) */
+    private class DetectionBatch(val detections: List<Detection>, val camera: CaptureCamera?)
+    @Volatile private var latest = DetectionBatch(emptyList(), null)
+    @Volatile private var detectionGeneration = 0         // 9교시: 새 결과가 나올 때마다 +1
+    @Volatile private var detectError: String? = null      // #9: 추론 오류 (다음 추론이 성공하면 지움)
+    private var lastDetectTimestamp = 0L
+    private val cornerIn = FloatArray(4)
+    private val cornerOut = FloatArray(4)
+    private val pointIn = FloatArray(2)
+    private val pointOut = FloatArray(2)
+
+    // ── 9교시: 바닥 투영 + 중복 병합 ──
+    /**
+     * 배치도의 가구 1개. 위치는 Anchor로 들고 있어서 ARCore가 지도를 보정하면 같이 따라감.
+     * 관측마다 앵커 기준 오프셋(dx, dz)을 누적 → 위치 = 앵커 + 오프셋 평균 (첫 관측은 오프셋 0)
+     */
+    private class MapObject(val label: String, val anchor: Anchor) {
+        var count = 1   // 몇 번 관측됐는지
+        private var sumDx = 0f
+        private var sumDz = 0f
+
+        fun x() = anchor.pose.tx() + sumDx / count
+        fun z() = anchor.pose.tz() + sumDz / count
+
+        fun addObservation(pose: Pose) {
+            sumDx += pose.tx() - anchor.pose.tx()
+            sumDz += pose.tz() - anchor.pose.tz()
+            count++
+        }
+
+        /** 다른 가구를 흡수: 두 평균을 관측 수로 가중 평균 (이 앵커는 그대로) */
+        fun absorb(other: MapObject) {
+            val total = count + other.count
+            val x = (x() * count + other.x() * other.count) / total
+            val z = (z() * count + other.z() * other.count) / total
+            count = total
+            sumDx = (x - anchor.pose.tx()) * total
+            sumDz = (z - anchor.pose.tz()) * total
+        }
+    }
+    private val mapObjects = mutableListOf<MapObject>()   // GL 스레드에서만 다룸
+    private var processedGeneration = 0                   // 이미 투영한 인식 결과 번호
+
+    // ── #4·#5: 바닥 외곽선·벽 (본 것을 누적, 1초에 한 번 다시 계산) ──
+    // 누적은 기준 앵커(추적 시작 위치에 1개) 좌표로 → ARCore가 지도를 보정해도 가구(앵커)와 함께 따라감.
+    // 기준 앵커는 바닥과 무관하게 유지 → 바닥을 다시 잡아도 벽 좌표가 바뀌지 않음
+    private var mapAnchor: Anchor? = null
+    private val floorMap = FloorPolygon()
+    private var floorLocal = emptyList<Pair<Float, Float>>()   // 기준 앵커 좌표 외곽선
+    private var floorLocalY: Float? = null                     // 지금 바닥으로 보는 높이 (기준 앵커 좌표 y)
+    private var lastFloorBuildNs = 0L
+    private val wallMap = WallSegments()
+    private var wallsLocal = emptyList<WallLine>()
+
+    // ── #38: 벽에 폰 대기 → 벽 선 교점으로 방 외곽선 (완료되면 자동 인식 바닥·벽 대신 사용) ──
+    // #13: 벽마다 기록한 순간의 카메라 pose에 앵커를 새로 만듦 → ARCore가 지도를 보정해도 따라가고,
+    // 스캔 시작 지점 기준 앵커(mapAnchor)가 멀어서 추적이 멈춰도 기록에 영향 없음
+    private val pendingOutlineOps = ConcurrentLinkedQueue<OutlineOp>()
+    private val wallAnchors = mutableListOf<Anchor>()   // GL 스레드에서만 다룸
+    // #40: 단계(외곽선 완료 여부)가 바뀔 때마다 +1. 이전 단계에서 시작한 인식 결과는 버림 (GL 스레드만 씀)
+    @Volatile private var stage = 0
+    private var outlineClosed = false
+        set(value) {
+            if (field != value) {
+                stage++
+                latest = DetectionBatch(emptyList(), null)   // 이전 단계의 박스가 남아 투영되지 않게
+            }
+            field = value
+        }
+
+    /** 앱 종료 시: 인식 스레드를 멈추고 모델 해제 */
+    fun release() {
+        detectExecutor.execute { detector?.close() }   // 진행 중인 추론이 끝난 뒤 실행됨
+        detectExecutor.shutdown()                       // 새 작업만 막고, 기다리지 않음
+    }
+
+    /** UI 스레드에서 호출: 탭 위치를 큐에 넣기만 함 (실제 처리는 다음 프레임에 GL 스레드에서) */
+    fun onTap(x: Float, y: Float) {
+        pendingTaps.add(floatArrayOf(x, y))
+    }
+
+    /** UI 스레드에서 호출: 점 모두 지우기 요청 */
+    fun clear() {
+        clearRequested = true
+    }
+
+    /** UI 스레드에서 호출: 벽 기록·되돌리기·다시·완료 (처리는 다음 프레임에 GL 스레드에서) */
+    fun outlineOp(op: OutlineOp) {
+        pendingOutlineOps.add(op)
+    }
+
+    override fun onSurfaceCreated(gl: GL10?, config: EGLConfig?) {
+        GLES20.glClearColor(0.1f, 0.1f, 0.1f, 1f)
+        background.createOnGlThread()
+        textureBoundTo = null
+    }
+
+    override fun onSurfaceChanged(gl: GL10?, width: Int, height: Int) {
+        GLES20.glViewport(0, 0, width, height)
+        viewportWidth = width
+        viewportHeight = height
+        viewportChanged = true
+    }
+
+    override fun onDrawFrame(gl: GL10?) {
+        GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT or GLES20.GL_DEPTH_BUFFER_BIT)
+        val session = session ?: return
+
+        if (textureBoundTo !== session) {
+            session.setCameraTextureName(background.textureId)
+            textureBoundTo = session
+            viewportChanged = true
+        }
+        if (viewportChanged) {
+            session.setDisplayGeometry(Surface.ROTATION_0, viewportWidth, viewportHeight)
+            viewportChanged = false
+        }
+
+        try {
+            val frame = session.update()
+            background.draw(frame)
+            val camera = frame.camera
+
+            if (clearRequested) {
+                anchors.forEach { it.detach() }   // ARCore에 "이 점 더 이상 추적 안 해도 돼" 알림
+                anchors.clear()
+                mapObjects.forEach { it.anchor.detach() }   // 9교시: 배치도도 초기화
+                mapObjects.clear()
+                resetMap()                                  // #4·#5: 누적한 바닥·벽도 초기화
+                resetWalls()                                // #38: 기록한 벽도
+                detectError = null                          // #9: 지난 스캔의 인식 오류도
+                clearRequested = false
+                message = "점과 배치도를 모두 지웠어요"
+            }
+            handleOutlineOps(session, camera)
+            handleTaps(frame, camera)
+            if (outlineClosed) {   // #40: 가구 인식은 가구 단계(외곽선 완료 후)에서만
+                maybeStartDetection(frame)
+                if (camera.trackingState == TrackingState.TRACKING) projectDetections(session, frame)   // 9교시
+            }
+            report(buildState(session, frame, camera))
+        } catch (e: Exception) {
+            report(ArUiState(status = "오류: ${e.javaClass.simpleName}", error = "오류가 났어요 · 스캔 화면을 다시 열어 주세요"))
+        }
+    }
+
+    /** 쌓인 탭을 하나씩 꺼내 Hit Test → 평면에 맞으면 앵커 생성 */
+    private fun handleTaps(frame: Frame, camera: Camera) {
+        while (true) {
+            val tap = pendingTaps.poll() ?: return
+            if (camera.trackingState != TrackingState.TRACKING) {
+                message = "추적 중일 때만 점을 찍을 수 있어요"
+                continue
+            }
+            // 화면 (x, y)에서 카메라 방향으로 광선을 쏴서 맞은 것들 (가까운 순)
+            val hit = frame.hitTest(tap[0], tap[1]).firstOrNull { h ->
+                val trackable = h.trackable
+                trackable is Plane && trackable.isPoseInPolygon(h.hitPose)   // 인식된 평면 "안쪽"만
+            }
+            if (hit == null) {
+                message = "여기서 평면을 못 찾았어요. 바닥·벽을 비추며 천천히 움직여 보세요"
+                continue
+            }
+            anchors += hit.createAnchor()
+            val kind = if ((hit.trackable as Plane).type == Plane.Type.VERTICAL) "벽" else "바닥"
+            message = "점 ${anchors.size}개 (방금 찍은 곳: $kind)"
+        }
+    }
+
+    private fun handleOutlineOps(session: Session, camera: Camera) {
+        while (true) {
+            when (pendingOutlineOps.poll() ?: return) {
+                OutlineOp.RECORD -> onWallRecord(recordWall(session, camera))
+                OutlineOp.UNDO -> {
+                    if (outlineClosed) outlineClosed = false else wallAnchors.removeLastOrNull()?.detach()
+                    message = "벽 ${wallAnchors.size}개 기록"
+                }
+                OutlineOp.RESET -> {
+                    resetWalls()
+                    message = "벽을 처음부터 기록해 주세요"
+                }
+                OutlineOp.CLOSE -> {
+                    val touches = wallTouchesWorld()
+                    val area = FloorPolygon.area(CornerOutline.fromWalls(touches))
+                    Log.d(TAG, "벽 완료 시도: 벽 %d개(추적 가능 %d개), 외곽선 넓이 %.2fm²".format(wallAnchors.size, touches.size, area))
+                    if (touches.size < 3) {
+                        message = "벽을 3개 이상 기록해야 완료할 수 있어요"
+                        onWallRecord(false)
+                    } else if (area < MIN_OUTLINE_AREA_M2) {
+                        // 같은 벽을 여러 번 기록하는 등 벽 방향이 겹치면 넓이 0인 외곽선이 됨
+                        message = "벽 방향이 겹치거나 나란해요 (넓이 %.1fm²). 다른 벽을 기록해 주세요".format(area)
+                        onWallRecord(false)   // 실패 = 짧게 2번 (기록 실패와 같은 신호)
+                    } else {
+                        outlineClosed = true
+                        message = "외곽선 완료 (벽 ${touches.size}개) · 매장을 천천히 걸으며 테이블·의자를 비춰 주세요"
+                    }
+                }
+            }
+        }
+    }
+
+    /**
+     * #38: 폰 화면을 벽에 댄 순간의 카메라 pose → 벽 1개. 기록했으면 true.
+     * 화면을 대면 뒷면 카메라가 방 안을 봐서 추적이 유지됨 (뒷면을 대도 벽 선은 같음).
+     * 위치 = 벽 위 한 점, 카메라 Z축을 바닥에 투영 = 벽 법선.
+     * #13: 그 pose에 앵커를 새로 만들어 저장 → 카메라만 추적 중이면 기록됨 (시작 지점 기준 앵커와 무관)
+     */
+    private fun recordWall(session: Session, camera: Camera): Boolean {
+        if (outlineClosed) {
+            message = "외곽선이 완료됐어요. [되돌리기]로 다시 고칠 수 있어요"
+            return false
+        }
+        if (camera.trackingState != TrackingState.TRACKING) {
+            message = "추적을 놓쳤어요. 벽에서 폰을 떼고 주변을 비춘 뒤 다시 기록해 주세요"
+            return false
+        }
+        val pose = camera.pose
+        val n = pose.zAxis
+        if (sqrt(n[0] * n[0] + n[2] * n[2]) < 0.5f) {   // 폰이 바닥·천장 쪽을 향함 (60° 이상 기울어짐)
+            message = "폰을 세워서 화면을 벽에 평평하게 대 주세요"
+            return false
+        }
+        val anchor = try {
+            session.createAnchor(pose)
+        } catch (e: Exception) {   // 같은 프레임에 추적을 잃은 경우 등
+            message = "추적을 놓쳤어요. 벽에서 폰을 떼고 주변을 비춘 뒤 다시 기록해 주세요"
+            return false
+        }
+        wallAnchors += anchor
+        Log.d(TAG, "벽 기록 #%d: (%.2f, %.2f) 법선 (%.2f, %.2f)".format(wallAnchors.size, pose.tx(), pose.tz(), n[0], n[2]))
+        message = "벽 ${wallAnchors.size}개 기록 · 다음 벽으로"
+        return true
+    }
+
+    /** 기록한 벽 → 지금의 월드 좌표 (각 벽 앵커의 지금 pose, 추적이 완전히 끝난 앵커는 제외) */
+    private fun wallTouchesWorld(): List<WallTouch> = wallAnchors
+        .filter { it.trackingState != TrackingState.STOPPED }
+        .map { a ->
+            val p = a.pose
+            val n = p.zAxis
+            WallTouch(p.tx(), p.tz(), n[0], n[2])
+        }
+
+    /** 기록한 벽 앵커를 모두 해제하고 외곽선 완료도 풂 */
+    private fun resetWalls() {
+        wallAnchors.forEach { it.detach() }
+        wallAnchors.clear()
+        outlineClosed = false
+    }
+
+    /**
+     * 인식 스레드가 쉬고 있으면: 현재 카메라 이미지를 복사해서 넘김.
+     * 바쁘면 이번 프레임은 건너뜀 (화면은 30fps, 인식은 가능한 만큼만)
+     */
+    private fun maybeStartDetection(frame: Frame) {
+        val detector = detector ?: return
+        if (frame.timestamp == lastDetectTimestamp) return
+        if (!detecting.compareAndSet(false, true)) return     // 이미 추론 중
+
+        val yuv = try {
+            // CPU용 카메라 이미지 (보통 640x480). 빨리 close해야 하므로 복사 후 바로 닫음
+            frame.acquireCameraImage().use { YuvFrame.from(it) }
+        } catch (e: Exception) {   // NotYetAvailableException 등: 다음 프레임에 다시
+            detecting.set(false)
+            return
+        }
+        lastDetectTimestamp = frame.timestamp
+        val startStage = stage
+        // 추론하는 동안(수백 ms) 폰이 움직이므로, 바닥 Hit Test는 이 순간의 카메라 기준으로 해야 함
+        val camera = frame.camera
+        val capture = if (camera.trackingState == TrackingState.TRACKING) {
+            val k = camera.imageIntrinsics
+            val f = k.focalLength
+            val c = k.principalPoint
+            val anchor = trackedMapAnchor()
+            val pose = anchor?.pose?.inverse()?.compose(camera.pose) ?: camera.pose
+            CaptureCamera(anchor, pose, floatArrayOf(f[0], f[1], c[0], c[1]))
+        } else null
+
+        detectExecutor.execute {
+            try {
+                val result = detector.detect(yuv)
+                if (startStage != stage) return@execute   // #40: 추론 중 단계가 바뀜 ([벽 다시] 등) → 버림
+                latest = DetectionBatch(result, capture)
+                detectionGeneration++      // GL 스레드에 "새 결과 있음" 알림 (이 스레드만 씀)
+                detectError = null
+            } catch (e: Exception) {
+                Log.e(TAG, "인식 오류", e)
+                detectError = "가구 인식이 잘 안 돼요 · 앱을 다시 켜 주세요"
+            } finally {
+                detecting.set(false)
+            }
+        }
+    }
+
+    /**
+     * 9교시: 새 인식 결과가 있으면, 각 박스의 "아래쪽 가운데"(다리가 바닥에 닿는 곳)를
+     * 바닥에 Hit Test → 카메라 반대쪽으로 반 깊이만큼 밀어 중심 추정 → 기존 가구와 가까우면 병합, 아니면 새로 추가
+     */
+    private fun projectDetections(session: Session, frame: Frame) {
+        val generation = detectionGeneration
+        if (generation == processedGeneration) return   // 이미 처리한 결과
+        processedGeneration = generation
+        // #40: 외곽선 밖 관측은 병합 전에 버림 (안쪽 가구와 합쳐져 평균이 바깥으로 끌려가지 않게)
+        val outline = CornerOutline.fromWalls(wallTouchesWorld())
+        // #67: 바닥 높이 = 위를 향한 수평면 중 가장 낮은 것 (테이블 윗면 판단용)
+        val floorY = session.getAllTrackables(Plane::class.java)
+            .filter { it.trackingState == TrackingState.TRACKING && it.type == Plane.Type.HORIZONTAL_UPWARD_FACING }
+            .minOfOrNull { it.centerPose.ty() }
+
+        val batch = latest
+        val cam = batch.camera ?: run {   // 찍을 때 추적 중이 아니었음 → 위치를 모름
+            if (batch.detections.isNotEmpty()) Log.d(TAG, "인식 버림: 촬영 순간 추적 아님 (%d개)".format(batch.detections.size))
+            return
+        }
+        val camPose = cam.currentPose() ?: run {   // 기준 앵커를 놓침 → 촬영 위치를 지금 좌표로 못 옮김
+            if (batch.detections.isNotEmpty()) Log.d(TAG, "인식 버림: 기준 앵커 추적 아님 (%d개)".format(batch.detections.size))
+            return
+        }
+        // 진단: 추론하는 동안 카메라가 움직인 거리 (이 값이 클 때 인식이 빠지는지 확인용)
+        val moved = frame.camera.pose.let { p ->
+            sqrt((p.tx() - camPose.tx()).let { it * it } + (p.tz() - camPose.tz()).let { it * it })
+        }
+        for (d in batch.detections) {
+            val box = toView(frame, d)
+            // 박스 아래가 화면 밖으로 잘렸으면 진짜 바닥 접점을 모름 → 접점 경로만 건너뜀 (윗면 경로는 박스 가운데만 씀)
+            val bottomCut = box.bottom > viewportHeight - EDGE_MARGIN_PX
+
+            // #67: 바닥에서 FURNITURE_MAX_M 넘는 수평면(선반·카운터·폰 바로 앞 면)은 가구 접점이 아님 (scan10.log: 1.3m 높이 면)
+            fun horizontalHits(x: Float, y: Float) = rayHits(frame, camPose, cam.intrinsics, x, y).filter { h ->
+                val p = h.trackable
+                p is Plane && p.type == Plane.Type.HORIZONTAL_UPWARD_FACING && p.isPoseInPolygon(h.hitPose) &&
+                    (floorY == null || h.hitPose.ty() - floorY < FURNITURE_MAX_M)
+            }
+
+            // #67: 테이블은 박스 가운데가 맞은 테이블 윗면 평면의 중심을 우선 사용.
+            // 박스 아래 접점은 의자에 가려 0.5m 넘게 흔들림 (scan10.log), 윗면 평면은 테이블 모양 그대로 잡힘
+            if (d.label == "테이블" && floorY != null) {
+                val top = horizontalHits((box.left + box.right) / 2f, (box.top + box.bottom) / 2f)
+                    .map { it.trackable as Plane }
+                    .firstOrNull { p ->
+                        val h = p.centerPose.ty() - floorY
+                        h in TABLE_TOP_MIN_M..FURNITURE_MAX_M && max(p.extentX, p.extentZ) <= TABLE_TOP_MAX_EXTENT_M
+                    }
+                if (top != null) {
+                    val c = top.centerPose
+                    Log.d(TAG, "테이블 윗면 center=(%.2f, %.2f) 높이 %.2fm 크기 %.2f×%.2f".format(
+                        c.tx(), c.tz(), c.ty() - floorY, top.extentX, top.extentZ))
+                    val center = Pose.makeTranslation(c.tx(), floorY, c.tz())
+                    // 윗면 중심이 외곽선 밖이면(평면이 벽 너머까지 잡힘) 아래 접점 경로로 다시 시도
+                    if (CornerOutline.near(outline, center.tx() to center.tz())) {
+                        addOrMerge(session, d.label, center, center)
+                        continue
+                    }
+                }
+            }
+            if (bottomCut) continue
+
+            val hits = horizontalHits((box.left + box.right) / 2f, box.bottom)
+            // #67: 가장 가까운 수평면 = 화면에 실제로 보이는 면 (hitTest는 카메라에서 가까운 순).
+            // 예전엔 가장 낮은 면(바닥)을 골랐는데, 박스 아래가 테이블 윗면에 걸리면(의자에 다리가 가려짐)
+            // 테이블 너머 바닥이 골라져 카메라 반대쪽으로 0.5~1m 밀림 (scan8.log)
+            val hit = hits.firstOrNull()
+            if (hit == null) {   // 수평면을 아직 못 찾은 곳
+                Log.d(TAG, "%s 바닥 못 찾음 view=(%.0f, %.0f) image=(%.0f, %.0f) 이동 %.2fm".format(
+                    d.label, (box.left + box.right) / 2f, box.bottom, pointOut[0], pointOut[1], moved))
+                continue
+            }
+            // #67 진단: 테이블 위치가 1m 넘게 어긋나는 원인 확인용 (카메라 위치, 박스, 맞은 수평면 후보 전부)
+            if (d.label == "테이블") {
+                val c = camPose
+                Log.d(TAG, "테이블 진단 cam=(%.2f, %.2f, %.2f) box=(%.0f, %.0f, %.0f, %.0f)/%dx%d hits=%s".format(
+                    c.tx(), c.ty(), c.tz(), box.left, box.top, box.right, box.bottom, viewportWidth, viewportHeight,
+                    hits.joinToString { "(%.2f, %.2f, y=%.2f)".format(it.hitPose.tx(), it.hitPose.tz(), it.hitPose.ty()) },
+                ))
+            }
+            // #67: 테이블 윗면에 맞았으면 그 점은 카메라 쪽 가장자리 → 반 크기만큼 밀어 중심으로.
+            // 안 밀면 반대편에서 본 관측과 0.7m 넘게 벌어져 테이블 하나가 둘로 갈라짐 (scan9.log)
+            val onTop = floorY != null && hit.hitPose.ty() - floorY > FLOOR_TOLERANCE_M
+            val halfDepth = if (d.label == "테이블" && onTop) TABLE_SIZE_M / 2 else HALF_DEPTH_M.getValue(d.label)
+            val center = estimateCenter(camPose, hit.hitPose, halfDepth)
+            if (!CornerOutline.near(outline, center.tx() to center.tz())) continue
+            addOrMerge(session, d.label, center, hit.hitPose)
+        }
+    }
+
+    /**
+     * 박스 아래 접점은 카메라에 가장 가까운 다리 → 어느 방향에서 보느냐에 따라 위치가 달라짐.
+     * 카메라 → 접점 수평 방향으로 반 깊이만큼 더 밀어 가구 중심을 추정 (높이는 바닥 그대로)
+     */
+    private fun estimateCenter(camera: Pose, contact: Pose, halfDepth: Float): Pose {
+        val dx = contact.tx() - camera.tx()
+        val dz = contact.tz() - camera.tz()
+        val len = sqrt(dx * dx + dz * dz)
+        if (len < 0.01f) return contact   // 바로 위에서 내려다본 경우: 방향을 알 수 없음
+        return Pose.makeTranslation(
+            contact.tx() + dx / len * halfDepth,
+            contact.ty(),
+            contact.tz() + dz / len * halfDepth,
+        )
+    }
+
+    /** 같은 종류가 병합 거리 안에 있으면 "같은 물체"로 보고 관측 위치를 평균에 누적 */
+    private fun addOrMerge(session: Session, label: String, pose: Pose, contact: Pose) {
+        val nearest = mapObjects
+            .filter { it.label == label && it.anchor.trackingState == TrackingState.TRACKING }
+            .minByOrNull { floorDistance(it, pose) }
+
+        val merged = nearest != null && floorDistance(nearest, pose) < MERGE_DISTANCE_M.getValue(label)
+        if (merged) {
+            nearest!!.addObservation(pose)
+        } else {
+            // #67: 바닥 평면이 아니라 월드에 앵커 (벽 앵커와 같은 방식). 평면 앵커는 바닥 조각이 합쳐질 때
+            // 가구마다 다르게 0.5~1.5m씩 튐 (scan5.log)
+            mapObjects += MapObject(label, session.createAnchor(pose))
+        }
+        // #2·#3: 관측 위치(center)와 누적 평균(avg) 비교용 (adb logcat -s ArRenderer)
+        val obj = if (merged) nearest!! else mapObjects.last()
+        Log.d(TAG, "%s contact=(%.2f, %.2f) center=(%.2f, %.2f) avg=(%.2f, %.2f) → %s".format(
+            label, contact.tx(), contact.tz(), pose.tx(), pose.tz(), obj.x(), obj.z(),
+            if (merged) "병합 #${mapObjects.indexOf(obj)} (${obj.count}회)" else "새로 추가 #${mapObjects.lastIndex}",
+        ))
+        if (merged) remerge(obj)
+    }
+
+    /**
+     * 평균이 움직여 같은 종류의 다른 가구와 병합 거리 안에 들어오면 하나로 합침.
+     * 첫 관측이 튀어 따로 생긴 중복을 정리 (관측 수가 많은 쪽이 남고, 나머지 앵커는 해제)
+     */
+    private fun remerge(obj: MapObject) {
+        val other = mapObjects
+            .filter { it !== obj && it.label == obj.label && it.anchor.trackingState == TrackingState.TRACKING }
+            .minByOrNull { floorDistance(it, obj.x(), obj.z()) }
+            ?: return
+        if (floorDistance(other, obj.x(), obj.z()) >= MERGE_DISTANCE_M.getValue(obj.label)) return
+
+        val (keep, drop) = if (obj.count >= other.count) obj to other else other to obj
+        val dropIndex = mapObjects.indexOf(drop)
+        keep.absorb(drop)
+        drop.anchor.detach()
+        mapObjects.remove(drop)
+        Log.d(TAG, "%s 재병합 #%d → #%d avg=(%.2f, %.2f) (%d회)".format(
+            obj.label, dropIndex, mapObjects.indexOf(keep), keep.x(), keep.z(), keep.count,
+        ))
+    }
+
+    /** 가구 평균 위치와 관측 위치의 바닥 평면 위 거리 (높이 y는 무시하고 x, z만) */
+    private fun floorDistance(obj: MapObject, b: Pose) = floorDistance(obj, b.tx(), b.tz())
+
+    private fun floorDistance(obj: MapObject, x: Float, z: Float): Float {
+        val dx = obj.x() - x
+        val dz = obj.z() - z
+        return sqrt(dx * dx + dz * dz)
+    }
+
+    /**
+     * 화면 점을 "추론 이미지를 찍은 순간"의 카메라에서 쏜 광선으로 Hit Test (가까운 순).
+     * frame.hitTest(x, y)는 지금 카메라 기준이라, 추론하는 동안 폰이 움직인 만큼 엉뚱한 바닥에 맞음.
+     * 화면 ↔ 이미지 변환은 화면 회전·잘림만 반영하므로 지금 frame으로 해도 됨
+     */
+    private fun rayHits(frame: Frame, camPose: Pose, intrinsics: FloatArray, viewX: Float, viewY: Float): List<HitResult> {
+        pointIn[0] = viewX; pointIn[1] = viewY
+        frame.transformCoordinates2d(Coordinates2d.VIEW, pointIn, Coordinates2d.IMAGE_PIXELS, pointOut)
+        val dir = camPose.rotateVector(cameraRay(pointOut[0], pointOut[1], intrinsics))
+        val len = sqrt(dir[0] * dir[0] + dir[1] * dir[1] + dir[2] * dir[2])
+        for (i in 0..2) dir[i] /= len   // 단위 벡터로 (API가 정규화를 요구하는지 문서에 없어 안전하게)
+        return frame.hitTest(camPose.translation, 0, dir, 0)
+    }
+
+    /** 카메라 이미지 좌표의 박스 → 화면 좌표 (ARCore가 회전·잘림을 모두 계산해 줌) */
+    private fun toView(frame: Frame, d: Detection): ScreenBox {
+        cornerIn[0] = d.left; cornerIn[1] = d.top; cornerIn[2] = d.right; cornerIn[3] = d.bottom
+        frame.transformCoordinates2d(Coordinates2d.IMAGE_PIXELS, cornerIn, Coordinates2d.VIEW, cornerOut)
+        return ScreenBox(
+            label = d.label, score = d.score,
+            left = min(cornerOut[0], cornerOut[2]), top = min(cornerOut[1], cornerOut[3]),
+            right = max(cornerOut[0], cornerOut[2]), bottom = max(cornerOut[1], cornerOut[3]),
+        )
+    }
+
+    private fun buildState(session: Session, frame: Frame, camera: Camera): ArUiState {
+        // 지금 추적 중인 평면 (다른 평면에 합쳐진 것은 제외)
+        val planes = session.getAllTrackables(Plane::class.java)
+            .filter { it.trackingState == TrackingState.TRACKING && it.subsumedBy == null }
+        val floors = floorPlanes(planes)
+        if (frame.timestamp - lastFloorBuildNs >= FLOOR_BUILD_INTERVAL_NS) {
+            lastFloorBuildNs = frame.timestamp
+            ensureMapAnchor(session, camera)
+            updateFloorPolygon(floors)
+            updateWalls(session)
+        }
+
+        // 3D 월드 좌표 → 화면 좌표 변환 행렬 = 투영 × 뷰
+        camera.getProjectionMatrix(projMatrix, 0, 0.1f, 100f)
+        camera.getViewMatrix(viewMatrix, 0)
+        Matrix.multiplyMM(viewProjMatrix, 0, projMatrix, 0, viewMatrix, 0)
+
+        val lastDistance =
+            if (anchors.size >= 2) distance(anchors[anchors.size - 2].pose, anchors.last().pose)
+            else null
+
+        // #38: 벽 기록 외곽선이 완료됐으면 자동 인식 벽 대신 외곽선(벽 선 교점, 직각 정리)과 그 변을 씀
+        // #40: 외곽선 완료 = 가구 단계. 벽 단계에서는 자동 인식 바닥은 빼고 자동 벽만 참고선으로
+        val touches = wallTouchesWorld()
+        val outline = if (outlineClosed) CornerOutline.fromWalls(touches).takeIf { it.size >= 3 } else null
+        val floorWorld = outline ?: emptyList()
+        val wallsWorld = outline?.let(CornerOutline::edges) ?: wallsWorld()
+        // #40: 외곽선 밖(NEAR_M 초과) 가구는 제외 (유리 너머·옆방)
+        val items = mapObjects.filter {
+            it.anchor.trackingState == TrackingState.TRACKING && (outline == null || CornerOutline.near(outline, it.x() to it.z()))
+        }
+        val pending = if (outline == null) touches.map { CornerOutline.segment(it) } else emptyList()
+        // #6: 월드 좌표 → 매장 좌표 (가장 긴 벽이 x축과 평행, 최소점 (0, 0))
+        // #40: 외곽선이 있으면 외곽선만 기준 → 가구가 추가돼도 좌표가 안 바뀜 (벽에 붙은 가구는 최대 -NEAR_M)
+        val store = if (outline != null) StoreFrame.of(outline, wallsWorld, emptyList())
+            else StoreFrame.of(floorWorld, wallsWorld, items.map { it.x() to it.z() } + pending.flatMap { listOf(it.first, it.second) })
+        val (camX, camZ) = store.point(camera.pose.tx() to camera.pose.tz())
+        // 카메라는 자기 -Z 방향을 바라봄 → 그 방향의 x, z 성분
+        val (headX, headZ) = store.direction(-camera.pose.zAxis[0], -camera.pose.zAxis[2])
+
+        return ArUiState(
+            status = statusOf(camera),
+            trackingIssue = issueOf(camera),
+            floorPlanes = floors.size,
+            points = anchors.map { toScreen(it) },
+            lastDistanceM = lastDistance,
+            message = message,
+            boxes = if (outline != null) latest.detections.map { toView(frame, it) } else emptyList(),
+            error = detectError.takeIf { outline != null },   // #9: 가구 단계에서만 (벽 단계는 인식 안 함)
+            mapItems = items.map {
+                // #67: 외곽선 밖(NEAR_M 여유 안)으로 추정된 가구는 벽 안쪽으로 당김
+                val p = it.x() to it.z()
+                val inside = if (outline != null) CornerOutline.pullInside(outline, p, INSET_M.getValue(it.label)) else p
+                val (x, z) = store.point(inside)
+                MapItem(it.label, x, z, it.count, confirmed = it.count >= CONFIRM_COUNT)
+            },
+            cameraX = camX,
+            cameraZ = camZ,
+            headingX = headX,
+            headingZ = headZ,
+            floorPolygon = floorWorld.map(store::point),
+            walls = wallsWorld.map(store::wall),
+            touchedWalls = pending.map(store::wall),
+            outlineClosed = outline != null,
+        )
+    }
+
+    /** 기준 앵커가 없으면(처음·지우기 후·추적 완전 중지) 지금 카메라 위치에 만듦. 방향은 월드 축 그대로(y = 위) */
+    private fun ensureMapAnchor(session: Session, camera: Camera) {
+        if (mapAnchor?.trackingState == TrackingState.STOPPED) resetMap()
+        if (mapAnchor != null || camera.trackingState != TrackingState.TRACKING) return
+        val p = camera.pose
+        mapAnchor = session.createAnchor(Pose.makeTranslation(p.tx(), p.ty(), p.tz()))
+    }
+
+    /** 추적 중인 기준 앵커 (놓쳤으면 null) */
+    private fun trackedMapAnchor() = mapAnchor?.takeIf { it.trackingState == TrackingState.TRACKING }
+
+    /** 기준 앵커 좌표 (x, z) → 지금의 월드 (x, z). 앵커를 놓쳤으면 null */
+    private fun anchorToWorld(): ((Pair<Float, Float>) -> Pair<Float, Float>)? {
+        val pose = trackedMapAnchor()?.pose ?: return null
+        val y = floorLocalY ?: 0f
+        return { (x, z) -> pose.transformPoint(floatArrayOf(x, y, z)).let { it[0] to it[2] } }
+    }
+
+    /** 기준 앵커 좌표 벽 선분 → 지금의 월드 좌표 */
+    private fun wallsWorld(): List<WallLine> {
+        val toWorld = anchorToWorld() ?: return emptyList()
+        return wallsLocal.map { (a, b) -> toWorld(a) to toWorld(b) }
+    }
+
+    /** 누적한 바닥만 비움 (더 낮은 진짜 바닥이 나타났을 때). 벽은 유지 */
+    private fun resetFloor() {
+        floorMap.clear()
+        floorLocal = emptyList()
+    }
+
+    /** 기준 앵커와 누적한 바닥·벽을 모두 비움 ("모두 지우기", 추적 중지) */
+    private fun resetMap() {
+        mapAnchor?.detach()
+        mapAnchor = null
+        resetFloor()
+        floorLocalY = null
+        wallMap.clear()
+        wallsLocal = emptyList()
+    }
+
+    /** 평면 경계 점들의 월드 좌표 (x, y, z) */
+    private fun boundaryWorld(plane: Plane): List<FloatArray> {
+        val buf = plane.polygon
+        return (0 until buf.limit() / 2).map { i ->
+            plane.centerPose.transformPoint(floatArrayOf(buf.get(2 * i), 0f, buf.get(2 * i + 1)))
+        }
+    }
+
+    /**
+     * #5: 수직 평면 중 벽만 골라 바닥 위 선분으로 → 평면마다 최신 선분 1개 저장 → 벽 목록 다시 묶기.
+     * 책상 옆판·PC 본체(낮음), 작은 조각(좁음)은 제외. 모니터 등 짧은 것은 WallSegments가 최소 길이로 거름.
+     * 다른 평면에 합쳐졌거나 추적이 완전히 끝난 평면은 지우고, 잠시 안 보이는 평면은 마지막 선분 유지
+     */
+    private fun updateWalls(session: Session) {
+        val anchor = trackedMapAnchor() ?: return
+        val localY = floorLocalY ?: return   // 바닥을 아직 못 잡았으면 벽 높이를 잴 수 없음
+        val floorY = anchor.pose.transformPoint(floatArrayOf(0f, localY, 0f))[1]
+        val toLocal = anchor.pose.inverse()
+
+        var candidateCount = 0
+        for (plane in session.getAllTrackables(Plane::class.java)) {
+            if (plane.type != Plane.Type.VERTICAL) continue
+            if (plane.subsumedBy != null || plane.trackingState == TrackingState.STOPPED) {
+                wallMap.remove(plane)
+                continue
+            }
+            if (plane.trackingState != TrackingState.TRACKING) continue   // 잠시 놓침: 마지막 선분 유지
+            val line = wallLineOf(plane, floorY, toLocal)
+            if (line == null) wallMap.remove(plane) else { wallMap.put(plane, line); candidateCount++ }
+        }
+        // 방 중심 = 바닥 외곽선 꼭짓점 평균 (겹친 평행 벽 중 바깥쪽 고르기용)
+        val center = floorLocal.takeIf { it.isNotEmpty() }?.let { f -> f.sumOf { it.first.toDouble() }.toFloat() / f.size to f.sumOf { it.second.toDouble() }.toFloat() / f.size }
+        val walls = wallMap.walls(center, floorLocal)
+        if (walls != wallsLocal) {
+            Log.d(TAG, "벽 후보 평면 %d개 → 벽 선분 %d개 (길이 %s)".format(
+                candidateCount, walls.size,
+                walls.joinToString { (a, b) -> "%.1fm".format(sqrt((b.first - a.first).let { it * it } + (b.second - a.second).let { it * it })) },
+            ))
+            walls.forEachIndexed { i, (a, b) ->
+                // 각도: x축 기준 0~180° (같은 방향 벽끼리 비교용)
+                val deg = (Math.toDegrees(atan2((b.second - a.second).toDouble(), (b.first - a.first).toDouble())) + 180.0) % 180.0
+                Log.d(TAG, "  벽 #%d: (%.2f, %.2f) → (%.2f, %.2f), 각도 %.0f°".format(i, a.first, a.second, b.first, b.second, deg))
+            }
+        }
+        wallsLocal = walls
+    }
+
+    /** 벽 후보 평면 → 기준 앵커 좌표의 바닥 위 선분 (벽이 아니면 null) */
+    private fun wallLineOf(plane: Plane, floorY: Float, toLocal: Pose): WallLine? {
+        val world = boundaryWorld(plane)
+        if (world.isEmpty()) return null
+        val top = world.maxOf { it[1] } - floorY
+        val height = top - (world.minOf { it[1] } - floorY)
+        // 모니터(꼭대기 ~1.25m, 화면 높이 ~0.35m)·책상 옆판·의자 등받이 제외
+        if (top < WALL_MIN_TOP_M || height < WALL_MIN_HEIGHT_M) return null
+        val pts = world.map { toLocal.transformPoint(it).let { p -> p[0] to p[2] } }
+        // 벽 방향 = 바닥 위에서 법선(평면 y축)에 수직인 방향
+        val n = toLocal.rotateVector(plane.centerPose.yAxis)
+        val len = sqrt(n[0] * n[0] + n[2] * n[2])
+        if (len < 1e-3f) return null
+        val dx = -n[2] / len
+        val dz = n[0] / len
+        val cx = pts.sumOf { it.first.toDouble() }.toFloat() / pts.size
+        val cz = pts.sumOf { it.second.toDouble() }.toFloat() / pts.size
+        val ts = pts.map { (x, z) -> (x - cx) * dx + (z - cz) * dz }
+        val t0 = ts.min()
+        val t1 = ts.max()
+        if (t1 - t0 < WALL_MIN_OBS_M) return null
+        Log.d(TAG, "벽 후보 %08x: 꼭대기 %.2fm · 높이 %.2fm · 폭 %.2fm · 중심 (%.2f, %.2f)".format(plane.hashCode(), top, height, t1 - t0, cx, cz))
+        return ((cx + dx * t0) to (cz + dz * t0)) to ((cx + dx * t1) to (cz + dz * t1))
+    }
+
+    /** 위를 향한 수평면 중 가장 낮은 높이 ± FLOOR_TOLERANCE_M 안의 것 = 바닥 (책상 윗면·의자 앉는 면 제외) */
+    private fun floorPlanes(planes: List<Plane>): List<Plane> {
+        val up = planes.filter { it.type == Plane.Type.HORIZONTAL_UPWARD_FACING }
+        val floorY = up.minOfOrNull { it.centerPose.ty() } ?: return emptyList()
+        return up.filter { it.centerPose.ty() - floorY < FLOOR_TOLERANCE_M }
+    }
+
+    /** 바닥 평면들의 경계(평면 로컬 x, z) → 월드 → 기준 앵커 좌표 (x, z) → 누적 → 합집합 외곽선 */
+    private fun updateFloorPolygon(floors: List<Plane>) {
+        val lowest = floors.minByOrNull { it.centerPose.ty() } ?: return
+        val anchor = trackedMapAnchor() ?: return
+        val toLocal = anchor.pose.inverse()
+        val lowestY = toLocal.transformPoint(lowest.centerPose.translation)[1]
+        // 처음이거나, 지금까지 바닥으로 본 것(예: 책상 윗면)보다 더 낮은 진짜 바닥이 나타나면 바닥만 다시 누적 (벽은 유지)
+        val prevY = floorLocalY
+        if (prevY == null || lowestY < prevY - FLOOR_TOLERANCE_M) {
+            if (prevY != null) Log.d(TAG, "바닥 높이 변경 %.2f → %.2f: 누적 바닥 초기화 (벽 유지)".format(prevY, lowestY))
+            resetFloor()
+            floorLocalY = lowestY
+        }
+
+        val pieces = floors.map { plane ->
+            boundaryWorld(plane).map { toLocal.transformPoint(it).let { p -> p[0] to p[2] } }
+        }
+        floorMap.add(pieces)
+        val polygon = floorMap.polygon()
+        if (polygon != floorLocal) {
+            Log.d(TAG, "바닥 조각 %d개 누적 → 외곽선 꼭짓점 %d개, 면적 %.1fm²".format(
+                floors.size, polygon.size, FloorPolygon.area(polygon),
+            ))
+        }
+        floorLocal = polygon
+    }
+
+    /** 앵커의 3D 위치를 화면 픽셀 좌표로 변환 */
+    private fun toScreen(anchor: Anchor): ScreenPoint {
+        if (anchor.trackingState != TrackingState.TRACKING) return ScreenPoint(0f, 0f, false)
+        val pose = anchor.pose
+        world[0] = pose.tx(); world[1] = pose.ty(); world[2] = pose.tz(); world[3] = 1f
+        Matrix.multiplyMV(clip, 0, viewProjMatrix, 0, world, 0)
+        if (clip[3] <= 0f) return ScreenPoint(0f, 0f, false)   // 카메라 뒤쪽
+        val ndcX = clip[0] / clip[3]                           // -1(왼쪽) ~ 1(오른쪽)
+        val ndcY = clip[1] / clip[3]                           // -1(아래) ~ 1(위)
+        return ScreenPoint(
+            x = (ndcX + 1f) / 2f * viewportWidth,
+            y = (1f - ndcY) / 2f * viewportHeight,             // 화면 y는 위→아래라 뒤집기
+            visible = true,
+        )
+    }
+
+    /** 두 점 사이의 직선 거리 (미터) */
+    private fun distance(a: Pose, b: Pose): Float {
+        val dx = a.tx() - b.tx()
+        val dy = a.ty() - b.ty()
+        val dz = a.tz() - b.tz()
+        return sqrt(dx * dx + dy * dy + dz * dz)
+    }
+
+    // 상태가 바뀌었을 때만 알림 (data class라 == 가 값 비교)
+    private fun report(state: ArUiState) {
+        if (state != lastState) {
+            lastState = state
+            onState(state)
+        }
+    }
+
+    private fun statusOf(camera: Camera): String = when (camera.trackingState) {
+        TrackingState.TRACKING -> "추적 중 ✅"
+        TrackingState.PAUSED -> "추적 대기: " + when (camera.trackingFailureReason) {
+            TrackingFailureReason.NONE -> "초기화 중 (폰을 천천히 좌우로 움직여 주세요)"
+            TrackingFailureReason.INSUFFICIENT_LIGHT -> "너무 어두워요"
+            TrackingFailureReason.EXCESSIVE_MOTION -> "너무 빨리 움직여요"
+            TrackingFailureReason.INSUFFICIENT_FEATURES -> "특징이 부족해요 (흰 벽·유리)"
+            else -> camera.trackingFailureReason.name
+        }
+        TrackingState.STOPPED -> "추적 중지됨"
+    }
+
+    /** #9: 추적 상태 → 사장님용 안내 종류 */
+    private fun issueOf(camera: Camera): TrackingIssue = when (camera.trackingState) {
+        TrackingState.TRACKING -> TrackingIssue.NONE
+        TrackingState.PAUSED -> when (camera.trackingFailureReason) {
+            TrackingFailureReason.INSUFFICIENT_LIGHT -> TrackingIssue.DARK
+            TrackingFailureReason.EXCESSIVE_MOTION -> TrackingIssue.FAST
+            TrackingFailureReason.INSUFFICIENT_FEATURES -> TrackingIssue.FEATURELESS
+            // #9: 내부 오류·카메라 사용 불가는 움직여도 안 풀림 → 다시 시작 안내
+            TrackingFailureReason.BAD_STATE, TrackingFailureReason.CAMERA_UNAVAILABLE -> TrackingIssue.RESTART
+            else -> TrackingIssue.INITIALIZING
+        }
+        TrackingState.STOPPED -> TrackingIssue.STOPPED
+    }
+
+    companion object {
+        const val EDGE_MARGIN_PX = 20f      // 박스 아래가 화면 끝에서 이만큼 안쪽이어야 바닥 접점으로 인정
+        const val CONFIRM_COUNT = 3         // 이만큼 관측돼야 "확정" (가끔 나오는 오인식 걸러내기)
+        // 종류별 병합 거리: 의자는 서로 붙어 있어서 작게, 테이블·소파는 크게
+        // 의자 0.55: 실측 로그에서 같은 의자 관측 간 최대 0.51m, 다른 의자 간 최소 0.65m (#3)
+        // 테이블·소파: 실측 없이 크기 비율로 추정 (의자 약 0.45m → 0.55, 테이블 약 0.8m → 0.8)
+        val MERGE_DISTANCE_M = mapOf("의자" to 0.55f, "테이블" to 0.8f, "소파" to 1.0f)
+        // 박스 아래 접점(카메라 쪽 끝) → 가구 중심까지 거리. 카메라 반대 방향으로 이만큼 밀어 중심 추정
+        // #67: 테이블은 0. 기둥 1개짜리 테이블은 접점이 이미 중심이라 밀면 벽 쪽으로 빠짐.
+        // 다리 4개짜리도 여러 방향에서 본 접점을 평균하면 중심 근처로 모임. 단, 테이블 윗면에 맞으면 TABLE_SIZE_M / 2
+        val HALF_DEPTH_M = mapOf("의자" to 0.2f, "테이블" to 0f, "소파" to 0.4f)
+        // #67: 외곽선 밖으로 추정된 가구를 벽 안쪽으로 당길 거리 (= 대략 반 크기)
+        val INSET_M = mapOf("의자" to CHAIR_RADIUS_M, "테이블" to TABLE_SIZE_M / 2, "소파" to 0.4f)
+        // #4: 가장 낮은 수평면에서 이 높이 안이면 바닥 (책상 윗면 ~0.7m, 의자 앉는 면 ~0.45m는 제외)
+        const val FLOOR_TOLERANCE_M = 0.15f
+        // #67: 테이블 윗면 평면 = 바닥에서 0.55~1.0m (scan8~10 실측 0.62~0.72m, 의자 앉는 면 ~0.45m 제외),
+        // 한 변 1.6m 이하 (붙은 테이블 여러 개가 한 평면이면 제외)
+        const val TABLE_TOP_MIN_M = 0.55f
+        const val FURNITURE_MAX_M = 1.0f
+        const val TABLE_TOP_MAX_EXTENT_M = 1.6f
+        private const val FLOOR_BUILD_INTERVAL_NS = 1_000_000_000L   // 바닥 외곽선·벽은 1초에 한 번만 계산
+        // #5: 벽 후보 — 평면 꼭대기가 바닥에서 이 높이 이상 (책상 옆판 ~0.75m, 모니터 ~1.25m 제외),
+        // 평면 세로 높이가 이 이상 (모니터 화면 ~0.35m 제외), 가로 폭이 이 이상
+        const val WALL_MIN_TOP_M = 1.5f
+        const val WALL_MIN_HEIGHT_M = 0.6f
+        const val WALL_MIN_OBS_M = 0.6f
+        // #38: 이보다 좁은 외곽선은 완료하지 않음 (벽 방향이 겹친 경우)
+        private const val MIN_OUTLINE_AREA_M2 = 1f
+        private const val TAG = "ArRenderer"
+    }
+}

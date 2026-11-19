@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Android 11 이하 자동 백업. #11: 로그인 토큰(DataStore)은 다른 기기로 넘어가지 않게 제외 -->
+<full-backup-content>
+    <exclude domain="file" path="datastore/auth.preferences_pb" />
+</full-backup-content>
